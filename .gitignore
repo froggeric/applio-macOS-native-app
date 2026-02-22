@@ -11,6 +11,7 @@
 *.bin
 *.wav
 *.txt
+!requirements*.txt
 *.zip
 *.png
 *.safetensors
@@ -22,3 +23,10 @@ rvc/models
 env
 venv
 .venv
+
+# macOS Build Artifacts
+venv_macos/
+build/
+dist/
+Applio.spec
+.DS_Store

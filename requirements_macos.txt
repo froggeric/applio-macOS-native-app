@@ -1,0 +1,50 @@
+# Core dependencies
+# Using same versions as requirements.txt where applicable, but filtered for macOS relevance
+numpy==1.26.4
+requests>=2.31.0,<2.32.0
+tqdm
+wget
+PyYAML
+
+# Audio processing
+ffmpeg-python>=0.2.0
+faiss-cpu==1.7.3
+librosa==0.11.0
+scipy==1.11.1
+soundfile==0.12.1
+noisereduce
+pedalboard
+stftpitchshift
+soxr
+
+# Machine learning
+omegaconf>=2.0.6
+numba==0.61.0
+torch==2.7.1
+torchaudio==2.7.1
+torchvision==0.22.1
+torchcrepe==0.0.23
+torchfcpe
+einops
+transformers==4.44.2
+
+# Visualization and UI
+matplotlib==3.7.2
+gradio==6.4.0
+
+# Miscellaneous utilities
+certifi>=2023.07.22
+antlr4-python3-runtime==4.8
+tensorboard
+tensorboardX
+edge-tts==7.2.7
+pypresence
+beautifulsoup4
+sounddevice
+webrtcvad-wheels
+
+# Packaging & Native UI
+pywebview>=5.0
+pyinstaller>=6.3.0
+pyobjc-framework-AVFoundation
+pyobjc-framework-Cocoa

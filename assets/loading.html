@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Applio is Starting</title>
+    <style>
+        :root {
+            --bg-color: #0b0b0b;
+            --text-color: #ffffff;
+            --accent-color: #007aff;
+            --muted-text: #b0b0b0;
+            --detail-text: #808080;
+            --progress-bg: rgba(255, 255, 255, 0.1);
+            --bar-color: #ffffff;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .container {
+            text-align: center;
+            width: 85%;
+            max-width: 440px;
+            animation: containerIn 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes containerIn {
+            from {
+                opacity: 0;
+                transform: scale(0.98) translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        .logo-container {
+            margin-bottom: 60px;
+        }
+
+        .logo-text {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 4px;
+            background: linear-gradient(180deg, #fff 0%, #666 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            opacity: 0.9;
+        }
+
+        /* Progress System */
+        .progress-wrapper {
+            position: relative;
+            margin-bottom: 32px;
+        }
+
+        .progress-container {
+            width: 100%;
+            height: 4px;
+            /* Slightly taller for visibility */
+            background-color: var(--progress-bg);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 2%;
+            /* Initial stub */
+            background: var(--bar-color);
+            border-radius: 2px;
+            transition: width 0.8s cubic-bezier(0.23, 1, 0.32, 1);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.4);
+            position: relative;
+        }
+
+        /* Animated shimmer effect on top of the bar */
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite linear;
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: 200% 0;
+            }
+
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        .status-group {
+            min-height: 80px;
+        }
+
+        .stage-indicator {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-color);
+            margin-bottom: 4px;
+            font-weight: 700;
+            opacity: 1;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 10px 0;
+            color: var(--text-color);
+            letter-spacing: -0.5px;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        #status-text {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.9);
+            margin: 0;
+            transition: opacity 0.4s ease;
+            height: 20px;
+            font-weight: 400;
+            letter-spacing: 0.3px;
+        }
+
+        #technical-detail {
+            font-size: 11px;
+            color: var(--detail-text);
+            margin-top: 8px;
+            font-family: "SF Mono", Menlo, monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0.8;
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 40px;
+            font-size: 10px;
+            color: var(--detail-text);
+            letter-spacing: 0.5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="logo-container">
+            <div class="logo-text">APPLIO</div>
+        </div>
+
+        <div class="progress-wrapper">
+            <div class="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+        </div>
+
+        <div class="status-group">
+            <div class="stage-indicator" id="stage-text">SYSTEM CALIBRATION</div>
+            <h1 id="main-status">Initializing</h1>
+            <p id="status-text">Starting backend architecture...</p>
+            <div id="technical-detail">Establishing environment variables...</div>
+        </div>
+    </div>
+
+    <div class="footer">ENGINE v3.6.0 | METAL ACCELERATED</div>
+
+    <script>
+        const progressBar = document.getElementById('progress-bar');
+        const mainStatus = document.getElementById('main-status');
+        const statusText = document.getElementById('status-text');
+        const stageText = document.getElementById('stage-text');
+        const techDetail = document.getElementById('technical-detail');
+
+        let lastHeading = "";
+        let lastSubHeading = "";
+        let lastDetail = "";
+
+        async function pollStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // 1. Progress Update
+                const displayProgress = Math.max(2, data.progress);
+                progressBar.style.width = displayProgress + '%';
+
+                // 2. Headings & Titles (Dynamic from Backend)
+                if (data.heading !== lastHeading) {
+                    mainStatus.style.opacity = 0;
+                    setTimeout(() => {
+                        mainStatus.innerText = data.heading;
+                        mainStatus.style.opacity = 1;
+                    }, 200);
+                    lastHeading = data.heading;
+                }
+
+                if (data.sub_heading !== lastSubHeading) {
+                    statusText.style.opacity = 0;
+                    setTimeout(() => {
+                        statusText.innerText = data.sub_heading;
+                        statusText.style.opacity = 1;
+                    }, 200);
+                    lastSubHeading = data.sub_heading;
+                }
+
+                // 3. Technical Details
+                if (data.detail !== lastDetail) {
+                    techDetail.innerText = data.detail;
+                    lastDetail = data.detail;
+                }
+
+                // 4. Stage Indicator
+                if (data.stage) {
+                    stageText.innerText = data.stage;
+                }
+
+            } catch (e) {
+                // Silent fail
+            }
+        }
+
+        setInterval(pollStatus, 200);
+        pollStatus();
+    </script>
+</body>
+
+</html>
