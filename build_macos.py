@@ -1,6 +1,8 @@
 import PyInstaller.__main__
 import os
 import shutil
+import json
+import requests
 
 # Clean up previous builds with robustness against Spotlight locks
 def clean_dir(path):
@@ -17,6 +19,46 @@ def clean_dir(path):
 import time
 clean_dir("dist")
 clean_dir("build")
+
+# =================================================================
+# Merge upstream pretrains.json with macOS additions
+# =================================================================
+def merge_pretrains():
+    """Fetch upstream pretrains.json and merge with macOS-specific additions."""
+    upstream_url = "https://huggingface.co/IAHispano/Applio/raw/main/pretrains.json"
+    additions_path = "assets/pretrains_macos_additions.json"
+    output_path = "assets/pretrains.json"
+
+    print("Fetching upstream pretrains.json...")
+    try:
+        response = requests.get(upstream_url, timeout=30)
+        response.raise_for_status()
+        upstream_data = response.json()
+        print(f"  Found {len(upstream_data)} upstream models")
+    except Exception as e:
+        print(f"  WARNING: Failed to fetch upstream pretrains: {e}")
+        upstream_data = {}
+
+    print("Loading macOS additions...")
+    if os.path.exists(additions_path):
+        with open(additions_path, 'r', encoding='utf-8') as f:
+            additions_data = json.load(f)
+        print(f"  Found {len(additions_data)} macOS-specific models")
+    else:
+        print(f"  WARNING: Additions file not found at {additions_path}")
+        additions_data = {}
+
+    # Merge: additions override/extend upstream
+    merged_data = {**upstream_data, **additions_data}
+
+    # Write merged file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(merged_data, f, indent=2, ensure_ascii=False)
+
+    print(f"Merged pretrains.json written with {len(merged_data)} models")
+    return output_path
+
+merged_pretrains_path = merge_pretrains()
 
 # Define build parameters
 APP_NAME = "Applio"

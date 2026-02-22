@@ -1,0 +1,20 @@
+{
+  "KLM9": {
+    "48k": {
+      "D": "SeoulStreamingStation/KLM9_PretrainedModel/resolve/main/D_KLM9T_48khz.pth",
+      "G": "SeoulStreamingStation/KLM9_PretrainedModel/resolve/main/G_KLM9T_48khz.pth"
+    }
+  },
+  "RefineGanVCTK": {
+    "44k": {
+      "D": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/RefineGanVCTK/D_RefineGanVCTK-v1_44k.pth",
+      "G": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/RefineGanVCTK/G_RefineGanVCTK-v1_44k.pth"
+    }
+  },
+  "KLM50 exp1": {
+    "44k": {
+      "D": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/KLM/D_KLM50_exp1_RFG_44k.pth",
+      "G": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/KLM/G_KLM50_exp1_RFG_44k.pth"
+    }
+  }
+}

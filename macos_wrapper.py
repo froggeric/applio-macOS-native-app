@@ -68,6 +68,30 @@ def setup_logging():
 setup_logging()
 
 # =================================================================
+# 1.5. Copy bundled pretrains.json to custom models folder
+# =================================================================
+
+def setup_bundled_pretrains():
+    """Copy bundled pretrains.json to custom models folder for Download tab."""
+    import shutil
+
+    bundled_path = os.path.join(BASE_PATH, "assets", "pretrains.json")
+    custom_dir = os.path.join(BASE_PATH, "rvc", "models", "pretraineds", "custom")
+    custom_path = os.path.join(custom_dir, "pretrains.json")
+
+    if os.path.exists(bundled_path):
+        os.makedirs(custom_dir, exist_ok=True)
+        try:
+            shutil.copy2(bundled_path, custom_path)
+            logging.info(f"Copied bundled pretrains.json to {custom_path}")
+        except Exception as e:
+            logging.warning(f"Failed to copy pretrains.json: {e}")
+    else:
+        logging.info(f"No bundled pretrains.json found at {bundled_path}")
+
+setup_bundled_pretrains()
+
+# =================================================================
 # 2. UI Support & Native Menu
 # =================================================================
 
