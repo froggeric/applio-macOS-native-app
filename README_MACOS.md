@@ -1,68 +1,139 @@
-# Applio macOS Wrapper & Build
+# Applio macOS Native App
 
-This directory contains the scripts to build Applio as a standalone native macOS application (App Bundle) using PyInstaller and PyWebview.
+This directory contains the scripts to build Applio as a standalone native macOS application using PyInstaller and PyWebview.
 
-## Prequisites
+## Prerequisites
 
-- macOS (Apple Silicon M1/M2/M3 recommended)
-- Python 3.9+ (Ideally 3.10)
-- `ffmpeg` installed (for audio processing)
-  - `brew install ffmpeg`
+- **macOS** (Apple Silicon M1/M2/M3 recommended)
+- **Python 3.10** (recommended - 3.11 may work, 3.12+ not tested)
+- **Homebrew** packages:
+  ```bash
+  brew install python@3.10 ffmpeg
+  ```
 
-## Build Instructions
+## Quick Start
 
-### 1. Set up Environment
-Create a clean virtual environment to minimize bundle size.
+### Option 1: Build from Source
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+# 1. Create virtual environment
+/opt/homebrew/opt/python@3.10/bin/python3.10 -m venv venv_macos
+source venv_macos/bin/activate
+
+# 2. Install dependencies
 pip install -r requirements_macos.txt
-```
 
-### 2. Build the Application
-Run the build script. This will use PyInstaller to package the application.
-
-```bash
+# 3. Build the app
 python build_macos.py
-```
 
-This process may take a few minutes. Once complete, you will find the application in:
-`dist/Applio.app`
-
-### 3. Running the App
-You can run the app directly from the `dist` folder:
-
-```bash
+# 4. Run
 open dist/Applio.app
 ```
 
-Or double-click it in Finder.
+### Option 2: Development Mode
+
+Run directly without building (useful for testing):
+
+```bash
+source venv_macos/bin/activate
+python macos_wrapper.py
+```
+
+## Build Output
+
+| Output | Size | Description |
+|--------|------|-------------|
+| `dist/Applio.app` | ~2.5GB | Complete app bundle with all dependencies and models |
+| `build/` | - | PyInstaller intermediate files (can be deleted) |
+
+## File Locations
+
+The app stores user data in standard macOS locations (persists across reinstalls):
+
+| Purpose | Location |
+|---------|----------|
+| **Models** (HuggingFace, PyTorch) | `~/Library/Application Support/Applio/` |
+| **Temp files** (Gradio) | `~/Library/Caches/Applio/` |
+| **Logs** | `~/Library/Logs/Applio/applio_wrapper.log` |
 
 ## Troubleshooting
 
 ### "Applio" is damaged and can't be opened
-Since the app is not signed with an Apple Developer ID, macOS Gatekeeper may block it. To bypass this locally:
+
+The app is ad-hoc signed (not notarized). Bypass Gatekeeper:
 
 ```bash
 xattr -cr dist/Applio.app
 ```
 
-### Console Debugging
-The app runs without a console window. If you encounter issues, logs are written to:
-`~/Library/Logs/Applio/applio_wrapper.log`
+### App hangs on first launch
 
-You can tail this log file to see what's happening:
+First launch downloads ~300MB of models. This can take several minutes depending on your connection. Check progress:
+
 ```bash
 tail -f ~/Library/Logs/Applio/applio_wrapper.log
 ```
 
-### Microphone Access
-The app requires microphone access. The `build_macos.py` script automatically patches the `Info.plist` to include the `NSMicrophoneUsageDescription`. If this fails, you may see a crash or silent failure when recording.
+### Backend timeout / App closes before starting
 
-## Development
-To test the wrapper without building:
+The wrapper waits up to 10 minutes for the backend to start (for slow connections). If this isn't enough, edit `macos_wrapper.py` and increase `timeout=600` to a higher value.
+
+### ModuleNotFoundError: No module named 'pkg_resources'
+
+This occurs with setuptools 70+. The build requires `setuptools<70`:
+
 ```bash
-python macos_wrapper.py
+pip install "setuptools<70"
 ```
-This typically opens the window but might fail if dependencies rely on specific PyInstaller paths (though the wrapper attempts to handle this).
+
+### No microphone access / silent recording failure
+
+The app requests microphone permission on first use. If denied:
+1. Open **System Settings → Privacy & Security → Microphone**
+2. Enable **Applio**
+
+### Icon shows as generic/missing
+
+The build converts `assets/ICON.ico` to `.icns` format. If this fails, ensure Pillow is installed:
+
+```bash
+pip install Pillow
+```
+
+## Build Requirements
+
+The following packages must be installed in the build environment:
+
+| Package | Purpose |
+|---------|---------|
+| `pyinstaller>=6.3.0` | App bundling |
+| `pywebview>=5.0` | Native window |
+| `pyobjc-framework-Cocoa` | macOS integration |
+| `pyobjc-framework-AVFoundation` | Microphone permissions |
+| `Pillow` | Icon conversion |
+| `setuptools<70` | pkg_resources support |
+
+All are included in `requirements_macos.txt`.
+
+## Architecture
+
+```
+Applio.app/
+├── Contents/
+│   ├── MacOS/Applio          # Main executable (PyInstaller bootloader)
+│   ├── Frameworks/           # Python runtime and packages
+│   ├── Resources/            # App assets (assets/, tabs/, rvc/, etc.)
+│   ├── Info.plist           # App metadata and permissions
+│   └── _CodeSignature/      # Ad-hoc signature
+```
+
+## Code Signing
+
+The build script signs the app with entitlements from `assets/entitlements.plist`:
+
+- `com.apple.security.app-sandbox` = false (file system access)
+- `com.apple.security.device.audio-input` = true (microphone)
+- `com.apple.security.cs.allow-jit` = true (PyTorch JIT compilation)
+- `com.apple.security.network.server` = true (Gradio server)
+
+For distribution, you'll need to sign with a Developer ID and notarize with Apple.
