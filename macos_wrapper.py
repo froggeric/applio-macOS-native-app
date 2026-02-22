@@ -286,7 +286,7 @@ class ApplioApp:
                 logging.error(f"Log observer error: {e}")
                 time.sleep(1)
 
-    def wait_for_backend(self, timeout=300):
+    def wait_for_backend(self, timeout=600):
         """Polls the Gradio backend for readiness."""
         import urllib.request
         url = f"http://{self.server_host}:{self.server_port}"

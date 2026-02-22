@@ -25,6 +25,11 @@ ICON_FILE = "assets/ICON.ico"
 
 # Hidden imports common in scientific/ML stacks
 HIDDEN_IMPORTS = [
+    "pkg_resources",
+    "packaging",
+    "packaging.version",
+    "packaging.specifiers",
+    "packaging.requirements",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.loops",
