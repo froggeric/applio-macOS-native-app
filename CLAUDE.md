@@ -120,3 +120,23 @@ RVC Pipeline → PostProcessor (Pedalboard effects) → Output Audio
 Dataset → Preprocess (slicer) → Extract features → Train model →
 Checkpoints in logs/{model_name}/
 ```
+
+## Pretrained Models
+
+**Vocoders** (neural architectures): HiFi-GAN, RefineGAN, MRF HiFi-GAN
+**Pretrained models** (trained weights): Titan, KLM, Snowie, etc. - work WITH a vocoder
+
+| Location | Purpose |
+|----------|---------|
+| `rvc/models/pretraineds/{vocoder}/` | Built-in pretrained weights |
+| `rvc/models/pretraineds/custom/` | Community models (via Download tab) |
+| `assets/pretrains.json` | Model download manifest |
+
+**Adding new models:**
+1. Add entry to `assets/pretrains_macos_additions.json` (format: `{"ModelName": {"48k": {"D": "url", "G": "url"}}}`)
+2. For new sample rates, create `rvc/configs/{rate}.json` and add to `version_config_paths` in `config.py`
+
+**Recovering deleted HuggingFace files:**
+```
+https://huggingface.co/{repo}/resolve/{commit_hash}/{file_path}
+```
