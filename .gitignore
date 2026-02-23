@@ -30,3 +30,6 @@ build/
 dist/
 Applio.spec
 .DS_Store
+
+# Local archives (downloaded models, etc.)
+.archive/
