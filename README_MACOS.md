@@ -115,6 +115,58 @@ The following packages must be installed in the build environment:
 
 All are included in `requirements_macos.txt`.
 
+## Pretrained Models Guide
+
+### Available Models (macOS Build)
+
+The macOS build includes these pretrained models (merged from upstream at build time):
+
+| Model | Sample Rate | Vocoder | Best For |
+|-------|-------------|---------|----------|
+| **KLM49_HFG** | 48kHz | HiFi-GAN | Tenor vocals, female singing, anime dubbing |
+| **RefineGanVCTK** | 44kHz | RefineGAN | Spoken word, narration, neutral tone |
+| **KLM50 exp1** | 44kHz | RefineGAN | Female pop, high tenor belts |
+
+Additional models (TITAN, Ov2Super, etc.) are available from the Download tab via the merged `pretrains.json`.
+
+### Choosing the Right Pretrain (2026 Studio Standards)
+
+#### 1. Female Singing (Pop, Anime, Soprano/Mezzo)
+**Goal:** Brightness, breath support, soaring high notes, glossy "expensive microphone" sheen.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | RefineGAN KLM5.0 (exp1) 44k | The absolute king for female pop. RefineGAN eliminates high-frequency metallic phase buzz that ruins female belts. KLM dataset gives pristine vibrato and breath control. |
+| **#2** | HiFi-GAN KLM49 48k | Best natively supported option. 48kHz captures the "air" of a female voice beautifully. HiFi-GAN can introduce slight buzz in 3-5kHz during very loud high notes. |
+| **#3** | Ov2Super 40k | If your female dataset is very small (under 3 minutes), Ov2Super adapts faster than TITAN or KLM, preserving female tone without sounding robotic. |
+
+#### 2. Deep Male Singing (Baritone, Bass, Rock, Warmth)
+**Goal:** Chest resonance, thickness, stability in low-mids (100-300Hz), grit.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | HiFi-GAN TITAN 48k (Medium/Large) | Undisputed champion for deep voices. Training data was vastly more diverse in low-end spectrum than KLM. Gives baritone voices thick, natural chest resonance. |
+| **#2** | HiFi-GAN KLM49 48k | Excellent for softer, breathier songs (ballads). Tends to naturally EQ brighter, which may strip masculine warmth. |
+| **#3** | RefineGAN VCTK 44k | Very neutral. Won't add warmth, but RefineGAN ensures low frequencies stay tight and punchy without getting muddy. |
+
+#### 3. High Male Singing (Tenor, R&B, K-Pop)
+**Goal:** Smooth chest-to-head transitions, clean falsetto, dynamic range.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | HiFi-GAN KLM49 48k | Tenor vocals thrive on this model. Handles falsetto transitions beautifully—Korean pop training data is full of high-tenor male vocals. |
+| **#2** | RefineGAN KLM5.0 (exp1) 44k | Flawless phase coherence on extreme high notes. Ranks second only due to recovery hassle. |
+| **#3** | HiFi-GAN TITAN 48k | Use if tenor sounds too "thin" or "whiny" on KLM. TITAN anchors the voice with more body. |
+
+#### 4. Spoken Word, Podcasting, Narration
+**Goal:** Intelligibility, zero musical artifacts, neutral tone, natural pauses.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | RefineGAN VCTK 44k | VCTK is a speech dataset—doesn't add musical vibrato to spoken words. Sounds like a dry audiobook in an anechoic chamber. |
+| **#2** | HiFi-GAN TITAN 48k | Excellent for deep, rich "Radio Announcer" or podcast voice. Very stable for long talking stretches. |
+| **#3** | HiFi-GAN KLM49 48k | Generally too musical for standard talking—can make speakers sound like they're slightly singing. Perfect for high-energy **Anime Dubbing** or emotional voice acting. |
+
 ## Architecture
 
 ```
