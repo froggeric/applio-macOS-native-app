@@ -506,38 +506,92 @@ def sign_app():
     # Sign the app
     print(f"  Identity: {DEVELOPER_IDENTITY}")
 
-    # Pre-sign Python frameworks and binaries (required for proper notarization)
-    print("  Pre-signing Python frameworks...")
+    # Step 1: Remove existing signatures from all binaries
+    # PyInstaller binaries have ad-hoc signatures that conflict with hardened runtime
+    print("  Removing existing signatures...")
+    frameworks_path = Path(app_path) / "Contents" / "Frameworks"
+    resources_path = Path(app_path) / "Contents" / "Resources"
 
-    # Sign Python frameworks in Frameworks and Resources
-    for base in ["Contents/Frameworks", "Contents/Resources"]:
-        framework_path = Path(app_path) / base / "Python.framework"
-        if framework_path.exists():
-            # Sign the framework's Versions/Current/Python binary
-            python_binary = framework_path / "Versions" / "Current" / "Python"
-            if python_binary.exists() or python_binary.is_symlink():
-                result = subprocess.run(
-                    ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-                     "--options", "runtime", "--timestamp", str(framework_path)],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    print(f"    WARNING: Failed to sign {framework_path}: {result.stderr[:100]}")
-
-    # Sign all .so and .dylib files
-    print("  Signing shared libraries...")
-    for base in ["Contents/Frameworks", "Contents/Resources"]:
-        base_path = Path(app_path) / base
+    for base_path in [frameworks_path, resources_path]:
         if base_path.exists():
             for ext in ["*.so", "*.dylib"]:
-                for lib in base_path.rglob(ext):
-                    result = subprocess.run(
-                        ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-                         "--options", "runtime", "--timestamp", str(lib)],
+                for binary in base_path.rglob(ext):
+                    subprocess.run(
+                        ["codesign", "--remove-signature", str(binary)],
                         capture_output=True, text=True
                     )
 
-    # Sign the app bundle with hardened runtime
+    # Remove signature from Python framework binaries
+    for base in ["Contents/Frameworks", "Contents/Resources"]:
+        framework_path = Path(app_path) / base / "Python.framework"
+        if framework_path.exists():
+            versions_path = framework_path / "Versions"
+            if versions_path.exists():
+                for version in versions_path.iterdir():
+                    if version.is_dir():
+                        python_bin = version / "Python"
+                        if python_bin.exists():
+                            subprocess.run(
+                                ["codesign", "--remove-signature", str(python_bin)],
+                                capture_output=True, text=True
+                            )
+
+    # Remove signature from main executable
+    main_exe = Path(app_path) / "Contents" / "MacOS" / APP_NAME
+    if main_exe.exists():
+        subprocess.run(
+            ["codesign", "--remove-signature", str(main_exe)],
+            capture_output=True, text=True
+        )
+
+    # Step 2: Sign all binaries with hardened runtime
+    print("  Signing binaries with hardened runtime...")
+    signed_count = 0
+
+    # Sign .so and .dylib files
+    for base_path in [frameworks_path, resources_path]:
+        if base_path.exists():
+            for ext in ["*.so", "*.dylib"]:
+                for binary in base_path.rglob(ext):
+                    result = subprocess.run(
+                        ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                         "--options", "runtime", "--timestamp", str(binary)],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        signed_count += 1
+
+    # Sign Python frameworks
+    for base in ["Contents/Frameworks", "Contents/Resources"]:
+        framework_path = Path(app_path) / base / "Python.framework"
+        if framework_path.exists():
+            versions_path = framework_path / "Versions"
+            if versions_path.exists():
+                for version in versions_path.iterdir():
+                    if version.is_dir():
+                        python_bin = version / "Python"
+                        if python_bin.exists():
+                            result = subprocess.run(
+                                ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                                 "--options", "runtime", "--timestamp", str(python_bin)],
+                                capture_output=True, text=True
+                            )
+                            if result.returncode == 0:
+                                signed_count += 1
+
+    # Sign main executable
+    if main_exe.exists():
+        result = subprocess.run(
+            ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+             "--options", "runtime", "--timestamp", str(main_exe)],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            signed_count += 1
+
+    print(f"  Signed {signed_count} binaries")
+
+    # Step 3: Sign the app bundle with --deep
     print("  Signing app bundle...")
     result = subprocess.run(
         ["codesign", "--force", "--deep", "--sign", DEVELOPER_IDENTITY,
