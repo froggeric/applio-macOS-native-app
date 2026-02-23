@@ -45,8 +45,8 @@ The build script supports two modes:
 
 | Mode | Command | App Size | First Launch | Use Case |
 |------|---------|----------|--------------|----------|
-| **Full** | `python build_macos.py` | ~8GB | Instant | Local development/use |
-| **Lite** | `python build_macos.py --lite` | ~3GB | Downloads ~2GB | Distribution (GitHub releases) |
+| **Full** | `python build_macos.py` | ~6.5GB | Instant | Local development/use |
+| **Lite** | `python build_macos.py --lite` | ~850MB | Downloads ~2GB | Distribution (GitHub releases) |
 
 ### Full Build (Default)
 Bundles all pretrained models for offline use. Best for personal use or when you want everything ready to go.
@@ -142,15 +142,15 @@ Output: `dist/Applio-{version}-{mode}.dmg`
 # Recommended command for distribution
 python build_macos.py --lite --sign --dmg --notarize
 
-# Output: dist/Applio-3.6.0.1-lite.dmg (notarized, ~3GB)
+# Output: dist/Applio-3.6.2.1-lite.dmg (notarized, ~850MB)
 ```
 
 ## Build Output
 
 | Output | Full Mode | Lite Mode |
 |--------|-----------|-----------|
-| `dist/Applio.app` | ~8GB | ~3GB |
-| `dist/Applio-{version}-{mode}.dmg` | ~8GB | ~3GB |
+| `dist/Applio.app` | ~6.5GB | ~850MB |
+| `dist/Applio-{version}-{mode}.dmg` | ~6.5GB | ~850MB |
 | `build/` | PyInstaller intermediates (can be deleted) |
 
 ## File Locations
@@ -265,11 +265,27 @@ This fork maintains minimal delta from upstream by patching at build time:
 
 | Patch | File | Purpose |
 |-------|------|---------|
-| 44100 Hz support | `tabs/train/train.py` | Adds 44.1kHz option to training UI |
-| Pretrained merging | `assets/pretrains.json` | Merges upstream + macOS additions |
+| 44100 Hz support | `patches/patch_train_44100.py` | Patches `tabs/train/train.py` to add 44.1kHz option |
+| Pretrained merging | `build_macos.py` | Merges upstream `pretrains.json` + `assets/pretrains_macos_additions.json` |
 | Model downloads | `patches/download_pretraineds.py` | Downloads custom models for full build |
+| App bundling | `build_macos.py` | PyInstaller build with signing, DMG, notarization |
+| Native wrapper | `macos_wrapper.py` | PyWebview native macOS window |
 
 **No upstream source files are modified** - all changes happen during the build process.
+
+### Fork-Only Files
+
+| File | Purpose |
+|------|---------|
+| `build_macos.py` | Main build script |
+| `macos_wrapper.py` | Native window wrapper |
+| `Applio.spec` | PyInstaller configuration (generated) |
+| `patches/patch_train_44100.py` | 44100 Hz UI patcher |
+| `patches/download_pretraineds.py` | Custom model downloader |
+| `assets/pretrains_macos_additions.json` | Additional pretrained models |
+| `assets/entitlements.plist` | Code signing entitlements |
+| `requirements_macos.txt` | macOS-specific dependencies |
+| `README_MACOS.md` | This documentation |
 
 ## Entitlements
 

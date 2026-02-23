@@ -33,3 +33,9 @@ Applio.spec
 
 # Local archives (downloaded models, etc.)
 .archive/
+
+# Generated at build time
+assets/pretrains.json
+
+# Claude Code local config
+.claude/

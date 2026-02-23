@@ -35,13 +35,24 @@ from pathlib import Path
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-APPLIO_VERSION = "3.6.0"
 BUILD_NUMBER = 1  # Increment for each build
+
+# Read version from assets/config.json
+def get_applio_version():
+    import json
+    try:
+        with open("assets/config.json", "r") as f:
+            config = json.load(f)
+            return config.get("version", "3.6.0")
+    except:
+        return "3.6.0"
+
+APPLIO_VERSION = get_applio_version()
 ENTRY_POINT = "macos_wrapper.py"
 ICON_FILE = "assets/ICON.ico"
 
 # Signing configuration
-DEVELOPER_IDENTITY = "Developer ID Application: Frederic Guigand (46BZ85ALNS)"
+DEVELOPER_IDENTITY = "Developer ID Application: Frédéric Guigand (46BZ85ALNS)"
 TEAM_ID = "46BZ85ALNS"
 ENTITLEMENTS_PATH = "assets/entitlements.plist"
 
@@ -497,11 +508,22 @@ def sign_app():
 
     # Sign all binaries first (required for proper deep signing)
     print("  Signing embedded binaries...")
-    frameworks_path = Path(app_path) / "Contents" / "Frameworks"
 
-    # Sign all .so and .dylib files
-    for ext in ["*.so", "*.dylib"]:
-        for binary in frameworks_path.rglob(ext):
+    # Function to check if a file is a Mach-O binary
+    def is_macho_binary(filepath):
+        try:
+            result = subprocess.run(
+                ["file", str(filepath)],
+                capture_output=True, text=True
+            )
+            return "Mach-O" in result.stdout
+        except:
+            return False
+
+    # Sign all Mach-O binaries in Frameworks
+    frameworks_path = Path(app_path) / "Contents" / "Frameworks"
+    for binary in frameworks_path.rglob("*"):
+        if binary.is_file() and is_macho_binary(binary):
             result = subprocess.run(
                 ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
                  "--options", "runtime", str(binary)],
@@ -509,6 +531,30 @@ def sign_app():
             )
             if result.returncode != 0:
                 print(f"    WARNING: Failed to sign {binary.name}: {result.stderr[:100]}")
+
+    # Sign Python framework in Resources (PyInstaller location)
+    resources_path = Path(app_path) / "Contents" / "Resources"
+    if resources_path.exists():
+        for binary in resources_path.rglob("*"):
+            if binary.is_file() and is_macho_binary(binary):
+                result = subprocess.run(
+                    ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                     "--options", "runtime", str(binary)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    print(f"    WARNING: Failed to sign {binary.name}: {result.stderr[:100]}")
+
+    # Sign the main executable
+    main_exe = Path(app_path) / "Contents" / "MacOS" / APP_NAME
+    if main_exe.exists():
+        result = subprocess.run(
+            ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+             "--options", "runtime", str(main_exe)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"    WARNING: Failed to sign main executable: {result.stderr[:100]}")
 
     # Sign the main app bundle
     print("  Signing app bundle...")
