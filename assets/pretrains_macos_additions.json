@@ -1,8 +1,8 @@
 {
-  "KLM9": {
+  "KLM49_HFG": {
     "48k": {
-      "D": "SeoulStreamingStation/KLM9_PretrainedModel/resolve/main/D_KLM9T_48khz.pth",
-      "G": "SeoulStreamingStation/KLM9_PretrainedModel/resolve/main/G_KLM9T_48khz.pth"
+      "D": "SeoulStreamingStation/KLM49_HFG/resolve/main/D_KLM_HFG_48k.pth",
+      "G": "SeoulStreamingStation/KLM49_HFG/resolve/main/G_KLM_HFG_48k.pth"
     }
   },
   "RefineGanVCTK": {
