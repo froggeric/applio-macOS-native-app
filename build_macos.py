@@ -552,14 +552,18 @@ def sign_app():
     for base_path in [frameworks_path, resources_path]:
         if base_path.exists():
             for ext in ["*.so", "*.dylib"]:
-                for binary in base_path.rglob(ext):
-                    result = subprocess.run(
-                        ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-                         "--options", "runtime", "--timestamp", str(binary)],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode == 0:
-                        signed_count += 1
+                try:
+                    for binary in base_path.rglob(ext):
+                        if binary.exists():  # Skip broken symlinks
+                            result = subprocess.run(
+                                ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                                 "--options", "runtime", "--timestamp", str(binary)],
+                                capture_output=True, text=True
+                            )
+                            if result.returncode == 0:
+                                signed_count += 1
+                except (FileNotFoundError, OSError):
+                    pass  # Skip directories with broken symlinks
 
     # Sign Python frameworks
     for base in ["Contents/Frameworks", "Contents/Resources"]:
