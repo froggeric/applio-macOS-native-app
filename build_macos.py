@@ -506,58 +506,8 @@ def sign_app():
     # Sign the app
     print(f"  Identity: {DEVELOPER_IDENTITY}")
 
-    # Sign all binaries first (required for proper deep signing)
-    print("  Signing embedded binaries...")
-
-    # Function to check if a file is a Mach-O binary
-    def is_macho_binary(filepath):
-        try:
-            result = subprocess.run(
-                ["file", str(filepath)],
-                capture_output=True, text=True
-            )
-            return "Mach-O" in result.stdout
-        except:
-            return False
-
-    # Sign all Mach-O binaries in Frameworks
-    frameworks_path = Path(app_path) / "Contents" / "Frameworks"
-    for binary in frameworks_path.rglob("*"):
-        if binary.is_file() and is_macho_binary(binary):
-            result = subprocess.run(
-                ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-                 "--options", "runtime", str(binary)],
-                capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                print(f"    WARNING: Failed to sign {binary.name}: {result.stderr[:100]}")
-
-    # Sign Python framework in Resources (PyInstaller location)
-    resources_path = Path(app_path) / "Contents" / "Resources"
-    if resources_path.exists():
-        for binary in resources_path.rglob("*"):
-            if binary.is_file() and is_macho_binary(binary):
-                result = subprocess.run(
-                    ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-                     "--options", "runtime", str(binary)],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    print(f"    WARNING: Failed to sign {binary.name}: {result.stderr[:100]}")
-
-    # Sign the main executable
-    main_exe = Path(app_path) / "Contents" / "MacOS" / APP_NAME
-    if main_exe.exists():
-        result = subprocess.run(
-            ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
-             "--options", "runtime", str(main_exe)],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            print(f"    WARNING: Failed to sign main executable: {result.stderr[:100]}")
-
-    # Sign the main app bundle
-    print("  Signing app bundle...")
+    # Sign with --deep --options runtime to handle all embedded binaries
+    print("  Signing app bundle with hardened runtime...")
     result = subprocess.run(
         ["codesign", "--force", "--deep", "--sign", DEVELOPER_IDENTITY,
          "--entitlements", ENTITLEMENTS_PATH,
