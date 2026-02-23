@@ -1,20 +1,14 @@
 {
-  "KLM49_HFG": {
-    "48k": {
-      "D": "SeoulStreamingStation/KLM49_HFG/resolve/main/D_KLM_HFG_48k.pth",
-      "G": "SeoulStreamingStation/KLM49_HFG/resolve/main/G_KLM_HFG_48k.pth"
-    }
-  },
-  "RefineGanVCTK": {
-    "44k": {
-      "D": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/RefineGanVCTK/D_RefineGanVCTK-v1_44k.pth",
-      "G": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/RefineGanVCTK/G_RefineGanVCTK-v1_44k.pth"
-    }
-  },
-  "KLM50 exp1": {
+  "KLM50 RefineGAN exp1": {
     "44k": {
       "D": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/KLM/D_KLM50_exp1_RFG_44k.pth",
       "G": "Politrees/RVC_resources/resolve/cf70ba3207bbaab9d6db46fbfeaa52f8fcdcc82e/pretrained/v2/RefineGAN/44k/KLM/G_KLM50_exp1_RFG_44k.pth"
+    }
+  },
+  "RefineGAN VCTK v1": {
+    "44k": {
+      "D": "SimplCup/RefineGanVCTKV1/resolve/main/f0D_RefineGanVCTKV1.pth",
+      "G": "SimplCup/RefineGanVCTKV1/resolve/main/f0G_RefineGanVCTKV1.pth"
     }
   }
 }

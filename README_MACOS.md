@@ -5,7 +5,7 @@ This directory contains the scripts to build Applio as a standalone native macOS
 ## Prerequisites
 
 - **macOS** (Apple Silicon M1/M2/M3 recommended)
-- **Python 3.10** (recommended - 3.11 may work, 3.12+ not tested)
+- **Python 3.10** (required - 3.12+ has PyInstaller compatibility issues)
 - **Homebrew** packages:
   ```bash
   brew install python@3.10 ffmpeg
@@ -39,12 +39,119 @@ source venv_macos/bin/activate
 python macos_wrapper.py
 ```
 
+## Build Modes
+
+The build script supports two modes:
+
+| Mode | Command | App Size | First Launch | Use Case |
+|------|---------|----------|--------------|----------|
+| **Full** | `python build_macos.py` | ~8GB | Instant | Local development/use |
+| **Lite** | `python build_macos.py --lite` | ~3GB | Downloads ~2GB | Distribution (GitHub releases) |
+
+### Full Build (Default)
+Bundles all pretrained models for offline use. Best for personal use or when you want everything ready to go.
+
+### Lite Build
+Excludes all models - they download automatically on first launch from HuggingFace:
+- HiFi-GAN pretraineds: ~800MB
+- RefineGAN pretraineds: ~600MB
+- F0 predictors (rmvpe, fcpe): ~214MB
+- Embedders (contentvec): ~361MB
+
+**Total first-launch download: ~2GB**
+
+## Versioning
+
+Version format: `{APPLIO_VERSION}.{BUILD_NUMBER}`
+
+Example: `3.6.0.1` = Applio 3.6.0, build 1
+
+```bash
+# Increment build number
+python build_macos.py --build-number 2
+```
+
+## DMG Creation
+
+Create a distributable DMG installer:
+
+```bash
+# Basic DMG (ad-hoc signed, for personal use)
+python build_macos.py --dmg
+
+# Lite build with DMG (recommended for distribution)
+python build_macos.py --lite --dmg
+```
+
+Output: `dist/Applio-{version}-{mode}.dmg`
+
+## Code Signing & Notarization
+
+### Prerequisites
+
+1. Apple Developer account
+2. Developer ID Application certificate installed in Keychain
+3. App-specific password stored in Keychain
+
+### Setting Up Signing
+
+1. **Request Certificate** (if not already done):
+   ```bash
+   # Create CSR
+   mkdir -p ~/Desktop/Applio_Certs
+   cd ~/Desktop/Applio_Certs
+   openssl req -new -newkey rsa:2048 -nodes \
+     -keyout applio_dev_private.key \
+     -out applio_dev.csr \
+     -subj "/emailAddress=your@email.com/C=FR/ST=State/L=City/O=YourName/CN=your@email.com"
+   ```
+
+2. **Get Certificate from Apple**:
+   - Go to [Apple Developer Certificates](https://developer.apple.com/account/resources/certificates/list)
+   - Create new certificate → "Developer ID Application"
+   - Upload the CSR file
+   - Download and double-click to install
+
+3. **Store Notarization Password**:
+   ```bash
+   # Create app-specific password at appleid.apple.com first
+   security add-generic-password \
+     -a "your@email.com" \
+     -s "applio-notarize" \
+     -w "xxxx-xxxx-xxxx-xxxx"
+   ```
+
+4. **Verify Setup**:
+   ```bash
+   security find-identity -v -p codesigning
+   # Should show: "Developer ID Application: Your Name (TEAMID)"
+   ```
+
+### Build Commands
+
+| Purpose | Command |
+|---------|---------|
+| Local build (ad-hoc) | `python build_macos.py` |
+| Signed app | `python build_macos.py --sign` |
+| Signed DMG | `python build_macos.py --sign --dmg` |
+| Notarized release DMG | `python build_macos.py --lite --sign --dmg --notarize` |
+
+### For GitHub Releases
+
+```bash
+# Recommended command for distribution
+python build_macos.py --lite --sign --dmg --notarize
+
+# Output: dist/Applio-3.6.0.1-lite.dmg (notarized, ~3GB)
+```
+
 ## Build Output
 
-| Output | Size | Description |
-|--------|------|-------------|
-| `dist/Applio.app` | ~2.5GB | Complete app bundle with all dependencies and models |
-| `build/` | - | PyInstaller intermediate files (can be deleted) |
+| Output | Full Mode | Lite Mode |
+|--------|-----------|-----------|
+| `dist/Applio.app` | ~8GB | ~3GB |
+| `dist/Applio-{version}-{mode}.dmg` | ~8GB | ~3GB |
+| `build/` | PyInstaller intermediates (can be deleted) |
 
 ## File Locations
 
@@ -56,19 +163,141 @@ The app stores user data in standard macOS locations (persists across reinstalls
 | **Temp files** (Gradio) | `~/Library/Caches/Applio/` |
 | **Logs** | `~/Library/Logs/Applio/applio_wrapper.log` |
 
+## Pretrained Models
+
+### Models Bundled in Full Build
+
+| Model | Vocoder | Rate | Files | Use Case |
+|-------|---------|------|-------|----------|
+| KLM49 | HiFi-GAN | 48kHz | `hifigan_klm49_{D,G}_48k.pth` | Tenor vocals, female singing |
+| TITAN Medium | HiFi-GAN | 48kHz | `hifigan_titan_medium_{D,G}_48k.pth` | Deep male vocals, baritone |
+| KLM50 exp1 | RefineGAN | 44kHz | `refinegan_klm50_exp1_{D,G}_44k.pth` | Female pop, high tenor |
+| VCTK v1 | RefineGAN | 44kHz | `refinegan_vctk_v1_{D,G}_44k.pth` | Spoken word, narration |
+
+### Default Models (Auto-downloaded)
+
+These are downloaded on first launch if missing:
+
+| Category | Sample Rates | Size |
+|----------|--------------|------|
+| HiFi-GAN | 32k, 40k, 48k | ~800MB |
+| RefineGAN | 24k, 32k | ~600MB |
+| F0 Predictors | rmvpe.pt, fcpe.pt | ~214MB |
+| Embedders | contentvec | ~361MB |
+
+### Custom Models (Download Tab)
+
+Additional models available via Download tab in the app:
+- Merged from upstream `pretrains.json` + `assets/pretrains_macos_additions.json`
+- Downloaded to `rvc/models/pretraineds/custom/`
+- Access via "Custom Pretrained" checkbox in Training tab
+
+### Choosing the Right Pretrain (2026 Studio Standards)
+
+#### 1. Female Singing (Pop, Anime, Soprano/Mezzo)
+**Goal:** Brightness, breath support, soaring high notes, glossy "expensive microphone" sheen.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | RefineGAN KLM50 exp1 44k | The absolute king for female pop. RefineGAN eliminates high-frequency metallic phase buzz that ruins female belts. |
+| **#2** | HiFi-GAN KLM49 48k | Best natively supported option. 48kHz captures the "air" of a female voice beautifully. |
+| **#3** | Ov2Super 40k | If your female dataset is very small (under 3 minutes), adapts faster without sounding robotic. |
+
+#### 2. Deep Male Singing (Baritone, Bass, Rock)
+**Goal:** Chest resonance, thickness, stability in low-mids (100-300Hz).
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | HiFi-GAN TITAN 48k Medium | Undisputed champion for deep voices. Gives baritone voices thick, natural chest resonance. |
+| **#2** | HiFi-GAN KLM49 48k | Excellent for softer, breathier songs (ballads). |
+| **#3** | RefineGAN VCTK 44k | Very neutral. Ensures low frequencies stay tight without getting muddy. |
+
+#### 3. High Male Singing (Tenor, R&B, K-Pop)
+**Goal:** Smooth chest-to-head transitions, clean falsetto, dynamic range.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | HiFi-GAN KLM49 48k | Tenor vocals thrive on this model. Handles falsetto transitions beautifully. |
+| **#2** | RefineGAN KLM50 exp1 44k | Flawless phase coherence on extreme high notes. |
+| **#3** | HiFi-GAN TITAN 48k | Use if tenor sounds too "thin" on KLM. TITAN anchors with more body. |
+
+#### 4. Spoken Word, Podcasting, Narration
+**Goal:** Intelligibility, zero musical artifacts, neutral tone.
+
+| Rank | Model | Why |
+|------|-------|-----|
+| **#1** | RefineGAN VCTK 44k | VCTK is a speech dataset—doesn't add musical vibrato to spoken words. |
+| **#2** | HiFi-GAN TITAN 48k | Excellent for deep, rich "Radio Announcer" voice. |
+| **#3** | HiFi-GAN KLM49 48k | Can make speakers sound like they're slightly singing—good for anime dubbing. |
+
+## Sample Rate Support
+
+The macOS build patches the training UI at build time to support additional sample rates:
+
+| Rate | HiFi-GAN | RefineGAN | Notes |
+|------|----------|-----------|-------|
+| 24kHz | - | ✓ | Default |
+| 32kHz | ✓ | ✓ | Default |
+| 40kHz | ✓ | - | Default |
+| 44.1kHz | ✓* | ✓* | Patched (custom models) |
+| 48kHz | ✓ | - | Default |
+
+*44.1kHz requires custom pretrained models (KLM50 exp1, VCTK v1)
+
+## Architecture
+
+```
+Applio.app/
+├── Contents/
+│   ├── MacOS/Applio          # Main executable (PyInstaller bootloader)
+│   ├── Frameworks/           # Python runtime and packages
+│   │   ├── rvc/models/       # Pretrained models (full build only)
+│   │   ├── tabs/             # UI tabs (patched at build time)
+│   │   └── ...               # Other Python packages
+│   ├── Resources/            # App assets
+│   ├── Info.plist           # App metadata, permissions, version
+│   └── _CodeSignature/      # Signature (ad-hoc or Developer ID)
+```
+
+## Fork Modifications (Build-Time Patches)
+
+This fork maintains minimal delta from upstream by patching at build time:
+
+| Patch | File | Purpose |
+|-------|------|---------|
+| 44100 Hz support | `tabs/train/train.py` | Adds 44.1kHz option to training UI |
+| Pretrained merging | `assets/pretrains.json` | Merges upstream + macOS additions |
+| Model downloads | `patches/download_pretraineds.py` | Downloads custom models for full build |
+
+**No upstream source files are modified** - all changes happen during the build process.
+
+## Entitlements
+
+The app is signed with entitlements from `assets/entitlements.plist`:
+
+| Entitlement | Value | Purpose |
+|-------------|-------|---------|
+| `app-sandbox` | false | Full filesystem access for models |
+| `device.audio-input` | true | Microphone access |
+| `cs.allow-jit` | true | PyTorch JIT compilation |
+| `network.client` | true | Download models |
+| `network.server` | true | Gradio local server |
+
 ## Troubleshooting
 
 ### "Applio" is damaged and can't be opened
 
-The app is ad-hoc signed (not notarized). Bypass Gatekeeper:
+For ad-hoc signed builds, bypass Gatekeeper:
 
 ```bash
 xattr -cr dist/Applio.app
 ```
 
+For signed/notarized builds, this shouldn't occur.
+
 ### App hangs on first launch
 
-First launch downloads ~300MB of models. This can take several minutes depending on your connection. Check progress:
+First launch downloads models (~2GB for lite build). Check progress:
 
 ```bash
 tail -f ~/Library/Logs/Applio/applio_wrapper.log
@@ -76,11 +305,11 @@ tail -f ~/Library/Logs/Applio/applio_wrapper.log
 
 ### Backend timeout / App closes before starting
 
-The wrapper waits up to 10 minutes for the backend to start (for slow connections). If this isn't enough, edit `macos_wrapper.py` and increase `timeout=600` to a higher value.
+The wrapper waits up to 10 minutes for the backend. If needed, edit `macos_wrapper.py` and increase `timeout=600`.
 
 ### ModuleNotFoundError: No module named 'pkg_resources'
 
-This occurs with setuptools 70+. The build requires `setuptools<70`:
+Requires `setuptools<70`:
 
 ```bash
 pip install "setuptools<70"
@@ -88,21 +317,37 @@ pip install "setuptools<70"
 
 ### No microphone access / silent recording failure
 
-The app requests microphone permission on first use. If denied:
-1. Open **System Settings → Privacy & Security → Microphone**
-2. Enable **Applio**
+Grant permission in **System Settings → Privacy & Security → Microphone → Enable Applio**
 
-### Icon shows as generic/missing
+### Custom pretrained not showing in training
 
-The build converts `assets/ICON.ico` to `.icns` format. If this fails, ensure Pillow is installed:
+1. Download via Download tab
+2. Enable "Custom Pretrained" checkbox in Training tab
+3. Select G and D files from dropdowns
+
+### Code signing fails
+
+Verify certificate is installed:
 
 ```bash
-pip install Pillow
+security find-identity -v -p codesigning
 ```
 
-## Build Requirements
+Should show your "Developer ID Application" certificate.
 
-The following packages must be installed in the build environment:
+### Notarization fails
+
+1. Verify app-specific password in keychain:
+   ```bash
+   security find-generic-password -a "your@email.com" -s "applio-notarize" -w
+   ```
+2. Check Apple System Status for outages
+3. Review notarization logs:
+   ```bash
+   xcrun notarytool log <submission-id> --apple-id your@email.com --team-id TEAMID --password "xxxx"
+   ```
+
+## Build Requirements
 
 | Package | Purpose |
 |---------|---------|
@@ -113,79 +358,14 @@ The following packages must be installed in the build environment:
 | `Pillow` | Icon conversion |
 | `setuptools<70` | pkg_resources support |
 
-All are included in `requirements_macos.txt`.
+All included in `requirements_macos.txt`.
 
-## Pretrained Models Guide
+## Release Checklist
 
-### Available Models (macOS Build)
-
-The macOS build includes these pretrained models (merged from upstream at build time):
-
-| Model | Sample Rate | Vocoder | Best For |
-|-------|-------------|---------|----------|
-| **KLM49_HFG** | 48kHz | HiFi-GAN | Tenor vocals, female singing, anime dubbing |
-| **RefineGanVCTK** | 44kHz | RefineGAN | Spoken word, narration, neutral tone |
-| **KLM50 exp1** | 44kHz | RefineGAN | Female pop, high tenor belts |
-
-Additional models (TITAN, Ov2Super, etc.) are available from the Download tab via the merged `pretrains.json`.
-
-### Choosing the Right Pretrain (2026 Studio Standards)
-
-#### 1. Female Singing (Pop, Anime, Soprano/Mezzo)
-**Goal:** Brightness, breath support, soaring high notes, glossy "expensive microphone" sheen.
-
-| Rank | Model | Why |
-|------|-------|-----|
-| **#1** | RefineGAN KLM5.0 (exp1) 44k | The absolute king for female pop. RefineGAN eliminates high-frequency metallic phase buzz that ruins female belts. KLM dataset gives pristine vibrato and breath control. |
-| **#2** | HiFi-GAN KLM49 48k | Best natively supported option. 48kHz captures the "air" of a female voice beautifully. HiFi-GAN can introduce slight buzz in 3-5kHz during very loud high notes. |
-| **#3** | Ov2Super 40k | If your female dataset is very small (under 3 minutes), Ov2Super adapts faster than TITAN or KLM, preserving female tone without sounding robotic. |
-
-#### 2. Deep Male Singing (Baritone, Bass, Rock, Warmth)
-**Goal:** Chest resonance, thickness, stability in low-mids (100-300Hz), grit.
-
-| Rank | Model | Why |
-|------|-------|-----|
-| **#1** | HiFi-GAN TITAN 48k (Medium/Large) | Undisputed champion for deep voices. Training data was vastly more diverse in low-end spectrum than KLM. Gives baritone voices thick, natural chest resonance. |
-| **#2** | HiFi-GAN KLM49 48k | Excellent for softer, breathier songs (ballads). Tends to naturally EQ brighter, which may strip masculine warmth. |
-| **#3** | RefineGAN VCTK 44k | Very neutral. Won't add warmth, but RefineGAN ensures low frequencies stay tight and punchy without getting muddy. |
-
-#### 3. High Male Singing (Tenor, R&B, K-Pop)
-**Goal:** Smooth chest-to-head transitions, clean falsetto, dynamic range.
-
-| Rank | Model | Why |
-|------|-------|-----|
-| **#1** | HiFi-GAN KLM49 48k | Tenor vocals thrive on this model. Handles falsetto transitions beautifully—Korean pop training data is full of high-tenor male vocals. |
-| **#2** | RefineGAN KLM5.0 (exp1) 44k | Flawless phase coherence on extreme high notes. Ranks second only due to recovery hassle. |
-| **#3** | HiFi-GAN TITAN 48k | Use if tenor sounds too "thin" or "whiny" on KLM. TITAN anchors the voice with more body. |
-
-#### 4. Spoken Word, Podcasting, Narration
-**Goal:** Intelligibility, zero musical artifacts, neutral tone, natural pauses.
-
-| Rank | Model | Why |
-|------|-------|-----|
-| **#1** | RefineGAN VCTK 44k | VCTK is a speech dataset—doesn't add musical vibrato to spoken words. Sounds like a dry audiobook in an anechoic chamber. |
-| **#2** | HiFi-GAN TITAN 48k | Excellent for deep, rich "Radio Announcer" or podcast voice. Very stable for long talking stretches. |
-| **#3** | HiFi-GAN KLM49 48k | Generally too musical for standard talking—can make speakers sound like they're slightly singing. Perfect for high-energy **Anime Dubbing** or emotional voice acting. |
-
-## Architecture
-
-```
-Applio.app/
-├── Contents/
-│   ├── MacOS/Applio          # Main executable (PyInstaller bootloader)
-│   ├── Frameworks/           # Python runtime and packages
-│   ├── Resources/            # App assets (assets/, tabs/, rvc/, etc.)
-│   ├── Info.plist           # App metadata and permissions
-│   └── _CodeSignature/      # Ad-hoc signature
-```
-
-## Code Signing
-
-The build script signs the app with entitlements from `assets/entitlements.plist`:
-
-- `com.apple.security.app-sandbox` = false (file system access)
-- `com.apple.security.device.audio-input` = true (microphone)
-- `com.apple.security.cs.allow-jit` = true (PyTorch JIT compilation)
-- `com.apple.security.network.server` = true (Gradio server)
-
-For distribution, you'll need to sign with a Developer ID and notarize with Apple.
+1. Update `BUILD_NUMBER` in `build_macos.py`
+2. Build and notarize:
+   ```bash
+   python build_macos.py --lite --sign --dmg --notarize
+   ```
+3. Verify DMG installs correctly on clean Mac
+4. Upload `dist/Applio-{version}-lite.dmg` to GitHub Releases
