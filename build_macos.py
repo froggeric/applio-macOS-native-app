@@ -506,8 +506,39 @@ def sign_app():
     # Sign the app
     print(f"  Identity: {DEVELOPER_IDENTITY}")
 
-    # Sign with --deep --options runtime to handle all embedded binaries
-    print("  Signing app bundle with hardened runtime...")
+    # Pre-sign Python frameworks and binaries (required for proper notarization)
+    print("  Pre-signing Python frameworks...")
+
+    # Sign Python frameworks in Frameworks and Resources
+    for base in ["Contents/Frameworks", "Contents/Resources"]:
+        framework_path = Path(app_path) / base / "Python.framework"
+        if framework_path.exists():
+            # Sign the framework's Versions/Current/Python binary
+            python_binary = framework_path / "Versions" / "Current" / "Python"
+            if python_binary.exists() or python_binary.is_symlink():
+                result = subprocess.run(
+                    ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                     "--options", "runtime", "--timestamp", str(framework_path)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    print(f"    WARNING: Failed to sign {framework_path}: {result.stderr[:100]}")
+
+    # Sign all .so and .dylib files
+    print("  Signing shared libraries...")
+    for base in ["Contents/Frameworks", "Contents/Resources"]:
+        base_path = Path(app_path) / base
+        if base_path.exists():
+            for ext in ["*.so", "*.dylib"]:
+                for lib in base_path.rglob(ext):
+                    result = subprocess.run(
+                        ["codesign", "--force", "--sign", DEVELOPER_IDENTITY,
+                         "--options", "runtime", "--timestamp", str(lib)],
+                        capture_output=True, text=True
+                    )
+
+    # Sign the app bundle with hardened runtime
+    print("  Signing app bundle...")
     result = subprocess.run(
         ["codesign", "--force", "--deep", "--sign", DEVELOPER_IDENTITY,
          "--entitlements", ENTITLEMENTS_PATH,
