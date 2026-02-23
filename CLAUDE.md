@@ -107,6 +107,18 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - `build/` - PyInstaller intermediate files
 - `dist/` - Final `Applio.app` bundle
 
+**Build process gotchas:**
+- PyInstaller cleans `dist/` at start - never delete while builds running
+- Lite build: ~820MB, Full build: ~6.5GB (takes ~5 min)
+- Signing requires handling broken symlinks (use `path.exists()` before `rglob`)
+- PyInstaller cache corruption: clear `~/Library/Application Support/pyinstaller/`
+- Notarization fails for PyInstaller apps - users run `xattr -cr Applio.app`
+
+**GitHub releases:**
+- Repo name for releases: `froggeric/applio-macOS-native-app`
+- `gh release create` needs `workflow` scope; use `gh api` as fallback
+- Create release via API: `gh api repos/{owner}/{repo}/releases -X POST -f tag_name=v{version}`
+
 ## Data Flow
 
 **Voice Conversion Pipeline:**
