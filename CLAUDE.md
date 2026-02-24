@@ -26,7 +26,6 @@ python macos_wrapper.py       # Run with native window
 python build_macos.py         # Build .app bundle → dist/Applio.app
 
 # Build options (combine as needed):
-python build_macos.py --lite          # Lite build (~820MB, no bundled models)
 python build_macos.py --dmg           # Create DMG installer after build
 python build_macos.py --sign          # Sign with Developer ID
 python build_macos.py --notarize      # Notarize with Apple (requires --sign)
@@ -142,7 +141,7 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 
 **Build process gotchas:**
 - PyInstaller cleans `dist/` at start - never delete while builds running
-- Lite build: ~820MB, Full build: ~6.5GB (takes ~5 min)
+- Build size: ~850MB (~2GB downloads on first launch)
 - Signing requires handling broken symlinks (use `path.exists()` before `rglob`)
 - PyInstaller cache corruption: clear `~/Library/Application Support/pyinstaller/`
 - Notarization fails for PyInstaller apps - users run `xattr -cr Applio.app`
