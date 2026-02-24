@@ -39,20 +39,10 @@ source venv_macos/bin/activate
 python macos_wrapper.py
 ```
 
-## Build Modes
+## Build Mode
 
-The build script supports two modes:
+The build creates a lightweight app (~850MB) with all user data stored externally. Models download automatically on first launch from HuggingFace:
 
-| Mode | Command | App Size | First Launch | Use Case |
-|------|---------|----------|--------------|----------|
-| **Full** | `python build_macos.py` | ~6.5GB | Instant | Local development/use |
-| **Lite** | `python build_macos.py --lite` | ~850MB | Downloads ~2GB | Distribution (GitHub releases) |
-
-### Full Build (Default)
-Bundles all pretrained models for offline use. Best for personal use or when you want everything ready to go.
-
-### Lite Build
-Excludes all models - they download automatically on first launch from HuggingFace:
 - HiFi-GAN pretraineds: ~800MB
 - RefineGAN pretraineds: ~600MB
 - F0 predictors (rmvpe, fcpe): ~214MB
@@ -79,11 +69,11 @@ Create a distributable DMG installer:
 # Basic DMG (ad-hoc signed, for personal use)
 python build_macos.py --dmg
 
-# Lite build with DMG (recommended for distribution)
-python build_macos.py --lite --dmg
+# For GitHub Releases (signed and notarized)
+python build_macos.py --sign --dmg --notarize
 ```
 
-Output: `dist/Applio-{version}-{mode}.dmg`
+Output: `dist/Applio-{version}.dmg`
 
 ## Code Signing & Notarization
 
@@ -134,23 +124,23 @@ Output: `dist/Applio-{version}-{mode}.dmg`
 | Local build (ad-hoc) | `python build_macos.py` |
 | Signed app | `python build_macos.py --sign` |
 | Signed DMG | `python build_macos.py --sign --dmg` |
-| Notarized release DMG | `python build_macos.py --lite --sign --dmg --notarize` |
+| Notarized release DMG | `python build_macos.py --sign --dmg --notarize` |
 
 ### For GitHub Releases
 
 ```bash
 # Recommended command for distribution
-python build_macos.py --lite --sign --dmg --notarize
+python build_macos.py --sign --dmg --notarize
 
-# Output: dist/Applio-3.6.2.1-lite.dmg (notarized, ~850MB)
+# Output: dist/Applio-3.6.2.1.dmg (notarized, ~850MB)
 ```
 
 ## Build Output
 
-| Output | Full Mode | Lite Mode |
-|--------|-----------|-----------|
-| `dist/Applio.app` | ~6.5GB | ~850MB |
-| `dist/Applio-{version}-{mode}.dmg` | ~6.5GB | ~850MB |
+| Output | Size |
+|--------|------|
+| `dist/Applio.app` | ~850MB |
+| `dist/Applio-{version}.dmg` | ~850MB |
 | `build/` | PyInstaller intermediates (can be deleted) |
 
 ## File Locations
@@ -206,18 +196,9 @@ Use **File → Set Data Location...** in the menu bar. Requires app restart.
 
 ## Pretrained Models
 
-### Models Bundled in Full Build
+### Pretrained Models (Auto-downloaded)
 
-| Model | Vocoder | Rate | Files | Use Case |
-|-------|---------|------|-------|----------|
-| KLM49 | HiFi-GAN | 48kHz | `hifigan_klm49_{D,G}_48k.pth` | Tenor vocals, female singing |
-| TITAN Medium | HiFi-GAN | 48kHz | `hifigan_titan_medium_{D,G}_48k.pth` | Deep male vocals, baritone |
-| KLM50 exp1 | RefineGAN | 44kHz | `refinegan_klm50_exp1_{D,G}_44k.pth` | Female pop, high tenor |
-| VCTK v1 | RefineGAN | 44kHz | `refinegan_vctk_v1_{D,G}_44k.pth` | Spoken word, narration |
-
-### Default Models (Auto-downloaded)
-
-These are downloaded on first launch if missing:
+Models are downloaded on first launch to the user's data location:
 
 | Category | Sample Rates | Size |
 |----------|--------------|------|
@@ -292,13 +273,14 @@ Applio.app/
 ├── Contents/
 │   ├── MacOS/Applio          # Main executable (PyInstaller bootloader)
 │   ├── Frameworks/           # Python runtime and packages
-│   │   ├── rvc/models/       # Pretrained models (full build only)
 │   │   ├── tabs/             # UI tabs (patched at build time)
 │   │   └── ...               # Other Python packages
 │   ├── Resources/            # App assets
 │   ├── Info.plist           # App metadata, permissions, version
 │   └── _CodeSignature/      # Signature (ad-hoc or Developer ID)
 ```
+
+**Note:** User data (models, datasets, training outputs) is stored in the user-selected external location, not in the app bundle.
 
 ## Fork Modifications (Build-Time Patches)
 
@@ -309,7 +291,6 @@ This fork maintains minimal delta from upstream by patching at build time:
 | 44100 Hz support | `patches/patch_train_44100.py` | Patches `tabs/train/train.py` to add 44.1kHz option |
 | Data paths | `patches/patch_data_paths.py` | Patches `core.py` to use `now_dir` instead of `__file__` for `logs_path` |
 | Pretrained merging | `build_macos.py` | Merges upstream `pretrains.json` + `assets/pretrains_macos_additions.json` |
-| Model downloads | `patches/download_pretraineds.py` | Downloads custom models for full build |
 | App bundling | `build_macos.py` | PyInstaller build with signing, DMG, notarization |
 | Native wrapper | `macos_wrapper.py` | PyWebview native macOS window with external data location support |
 
@@ -423,7 +404,7 @@ All included in `requirements_macos.txt`.
 1. Update `BUILD_NUMBER` in `build_macos.py`
 2. Build and notarize:
    ```bash
-   python build_macos.py --lite --sign --dmg --notarize
+   python build_macos.py --sign --dmg --notarize
    ```
 3. Verify DMG installs correctly on clean Mac
-4. Upload `dist/Applio-{version}-lite.dmg` to GitHub Releases
+4. Upload `dist/Applio-{version}.dmg` to GitHub Releases

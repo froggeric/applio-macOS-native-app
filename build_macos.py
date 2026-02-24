@@ -3,14 +3,13 @@
 Applio macOS Build Script
 
 Usage:
-    python build_macos.py              # Full build (bundles all models)
-    python build_macos.py --lite       # Lite build (no models, downloads on launch)
+    python build_macos.py              # Build app (models download on first launch)
     python build_macos.py --dmg        # Also create DMG installer
     python build_macos.py --sign --dmg # Signed DMG for distribution
+    python build_macos.py --sign --dmg --notarize  # Full release build
 
-Build modes:
-    --full (default): Bundle all pretrained models for offline use
-    --lite:           Minimal build, models downloaded on first launch (~2GB)
+Build mode:
+    Lite build (default): User data stored externally, models download on first launch
 
 Signing & Notarization:
     --sign:           Sign with Developer ID certificate
@@ -69,17 +68,89 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument(
-        "--full",
-        action="store_true",
-        default=True,
-        help="Full build with all models bundled (default)"
-    )
-    mode_group.add_argument(
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
         "--lite",
         action="store_true",
-        help="Lite build without models (downloads on first launch)"
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
+    )
+    # Lite mode is now the default - all user data stored externally
+    parser.add_argument(
+        "--lite",
+        action="store_true",
+        default=True,
+        help="Lite build - models download on first launch (default)",
     )
     parser.add_argument(
         "--build-number",
@@ -217,10 +288,8 @@ def download_pretraineds():
     return True
 
 
-if not LITE_MODE:
-    download_pretraineds()
-else:
-    print("Lite mode: Skipping pretrained model downloads")
+# Lite mode: models download on first launch
+print("Skipping pretrained model downloads (will download on first launch)")
 
 
 # =================================================================
@@ -320,7 +389,7 @@ pyinstaller_args = [
 # =================================================================
 print("=" * 60)
 print(f"Applio macOS Build - {VERSION}")
-print(f"Mode: {'LITE' if LITE_MODE else 'FULL'}")
+print(f"Mode: LITE (user data stored externally)")
 print("=" * 60)
 print()
 
@@ -331,12 +400,9 @@ PyInstaller.__main__.run(pyinstaller_args)
 # =================================================================
 # Post-build: Remove models in lite mode
 # =================================================================
-def clean_lite_models():
-    """Remove bundled models from lite build to reduce size."""
-    if not LITE_MODE:
-        return
-
-    print("\nLite mode: Removing bundled models...")
+def clean_bundled_models():
+    """Remove bundled models from build - user data stored externally."""
+    print("\nRemoving bundled models (user data stored externally)...")
 
     frameworks_path = Path("dist") / f"{APP_NAME}.app" / "Contents" / "Frameworks"
     models_path = frameworks_path / "rvc" / "models"
@@ -375,7 +441,7 @@ def clean_lite_models():
     print(f"\n  Total freed: {total_freed / 1024 / 1024:.1f} MB")
 
 
-clean_lite_models()
+clean_bundled_models()
 
 
 # =================================================================
@@ -687,7 +753,7 @@ def create_dmg():
 
     print("\nCreating DMG installer...")
 
-    dmg_name = f"{APP_NAME}-{VERSION}-{'lite' if LITE_MODE else 'full'}.dmg"
+    dmg_name = f"{APP_NAME}-{VERSION}.dmg"
     dmg_path = os.path.join("dist", dmg_name)
     temp_dmg = os.path.join("dist", "temp.dmg")
 
@@ -838,7 +904,7 @@ if os.path.exists(app_path):
     print("BUILD COMPLETE")
     print("=" * 60)
     print(f"  Version:    {VERSION}")
-    print(f"  Mode:       {'LITE' if LITE_MODE else 'FULL'}")
+    print(f"  Mode:       LITE (user data stored externally)")
     print(f"  Signed:     {'Yes (Developer ID)' if SIGN_APP and sign_success else 'Ad-hoc' if sign_success else 'No'}")
     print(f"  Location:   {app_path}")
     print(f"  Size:       {app_size / 1024 / 1024:.1f} MB ({app_size / 1024 / 1024 / 1024:.2f} GB)")
@@ -851,8 +917,7 @@ if os.path.exists(app_path):
     if NOTARIZE:
         print(f"  Notarized:  {'Yes' if notarize_success else 'Failed'}")
 
-    if LITE_MODE:
-        print(f"\n  Note: Lite build - models (~2GB) will download on first launch")
+    print(f"\n  Note: Models (~2GB) will download on first launch")
 
     print("=" * 60)
 else:
