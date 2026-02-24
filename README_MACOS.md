@@ -155,13 +155,54 @@ python build_macos.py --lite --sign --dmg --notarize
 
 ## File Locations
 
-The app stores user data in standard macOS locations (persists across reinstalls):
+### User Data Location (First-Run Selection)
+
+On first launch, the app prompts for a data storage location. This location stores all training outputs, datasets, voice models, and inference outputs.
+
+Default: `~/Applio/`
+
+Preferences stored in: `~/Library/Preferences/com.iahispano.applio.plist`
+
+### Cache Locations (Fixed)
+
+These cache locations are fixed and separate from user data:
 
 | Purpose | Location |
 |---------|----------|
-| **Models** (HuggingFace, PyTorch) | `~/Library/Application Support/Applio/` |
+| **HuggingFace Cache** | `~/Library/Application Support/Applio/huggingface/` |
 | **Temp files** (Gradio) | `~/Library/Caches/Applio/` |
 | **Logs** | `~/Library/Logs/Applio/applio_wrapper.log` |
+
+### Data Directory Structure
+
+The user data location contains:
+
+```
+~/Applio/                          # User-selected location
+├── logs/                           # Training outputs, voice models
+│   ├── {model_name}/               # Per-model training data
+│   │   ├── sliced_audios_16k/      # Preprocessed audio
+│   │   ├── f0/, f0_voiced/         # Pitch extraction
+│   │   ├── extracted/               # Feature embeddings
+│   │   └── *.pth, *.index          # Model weights, feature index
+│   └── zips/                        # Downloaded model archives
+├── assets/
+│   ├── datasets/                   # Training datasets
+│   ├── audios/                     # Inference outputs
+│   └── presets/                    # Effect presets
+└── rvc/models/
+    ├── pretraineds/                 # Pretrained models
+    │   ├── hifi-gan/               # HiFi-GAN vocoders
+    │   ├── refinegan/               # RefineGAN vocoders
+    │   └── custom/                  # Downloaded community models
+    ├── embedders/                   # ContentVec embedders
+    ├── predictors/                  # F0 predictors (rmvpe.pt, fcpe.pt)
+    └── formant/                     # Formant shift models
+```
+
+### Changing Data Location
+
+Use **File → Set Data Location...** in the menu bar. Requires app restart.
 
 ## Pretrained Models
 
@@ -266,10 +307,11 @@ This fork maintains minimal delta from upstream by patching at build time:
 | Patch | File | Purpose |
 |-------|------|---------|
 | 44100 Hz support | `patches/patch_train_44100.py` | Patches `tabs/train/train.py` to add 44.1kHz option |
+| Data paths | `patches/patch_data_paths.py` | Patches `core.py` to use `now_dir` instead of `__file__` for `logs_path` |
 | Pretrained merging | `build_macos.py` | Merges upstream `pretrains.json` + `assets/pretrains_macos_additions.json` |
 | Model downloads | `patches/download_pretraineds.py` | Downloads custom models for full build |
 | App bundling | `build_macos.py` | PyInstaller build with signing, DMG, notarization |
-| Native wrapper | `macos_wrapper.py` | PyWebview native macOS window |
+| Native wrapper | `macos_wrapper.py` | PyWebview native macOS window with external data location support |
 
 **No upstream source files are modified** - all changes happen during the build process.
 

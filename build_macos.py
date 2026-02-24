@@ -311,6 +311,7 @@ pyinstaller_args = [
     "--collect-all=sounddevice",
     "--target-arch=arm64",
     "--osx-bundle-identifier=com.iahispano.applio",
+    "--additional-hooks-dir=hooks",  # Custom hooks to override broken contrib hooks
 ] + add_data_args + hidden_import_args
 
 
@@ -382,13 +383,36 @@ clean_lite_models()
 # =================================================================
 def apply_patches():
     """Apply fork-specific patches to bundled files without modifying upstream source."""
+    print("\nApplying fork patches to bundled files...")
+
+    # Patch 1: core.py - redirect logs_path to use now_dir instead of __file__
+    bundled_core_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "core.py")
+    if os.path.exists(bundled_core_py):
+        print(f"  Patching: {bundled_core_py}")
+        data_paths_patcher = "patches/patch_data_paths.py"
+        if os.path.exists(data_paths_patcher):
+            dp_result = subprocess.run(
+                [sys.executable, data_paths_patcher, os.path.dirname(bundled_core_py)],
+                capture_output=True,
+                text=True
+            )
+            for line in dp_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+            if dp_result.returncode != 0:
+                print(f"    WARNING: Data paths patcher returned {dp_result.returncode}")
+        else:
+            print(f"    WARNING: Data paths patcher not found at {data_paths_patcher}")
+    else:
+        print(f"  WARNING: Bundled core.py not found at {bundled_core_py}")
+
+    # Patch 2: train.py - add 44100 Hz sample rate option
     bundled_train_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "tabs", "train", "train.py")
 
     if not os.path.exists(bundled_train_py):
-        print(f"WARNING: Bundled train.py not found at {bundled_train_py}")
+        print(f"  WARNING: Bundled train.py not found at {bundled_train_py}")
         return False
 
-    print("\nApplying fork patches to bundled files...")
     print(f"  Patching: {bundled_train_py}")
 
     patcher_path = "patches/patch_train_44100.py"
@@ -412,6 +436,28 @@ def apply_patches():
     for line in result.stdout.strip().split('\n'):
         if line:
             print(f"  {line}")
+
+    # Patch extract.py for multiprocessing safety
+    bundled_extract_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "rvc", "train", "extract", "extract.py")
+
+    if os.path.exists(bundled_extract_py):
+        print(f"  Patching: {bundled_extract_py}")
+        mp_patcher_path = "patches/patch_multiprocessing.py"
+        if os.path.exists(mp_patcher_path):
+            mp_result = subprocess.run(
+                [sys.executable, mp_patcher_path, bundled_extract_py],
+                capture_output=True,
+                text=True
+            )
+            for line in mp_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+            if mp_result.returncode not in [0, 1]:  # 0 = patched, 1 = already patched
+                print(f"    WARNING: Multiprocessing patcher failed with exit code {mp_result.returncode}")
+        else:
+            print(f"    WARNING: Multiprocessing patcher not found at {mp_patcher_path}")
+    else:
+        print(f"  WARNING: Bundled extract.py not found at {bundled_extract_py}")
 
     return True
 
@@ -447,6 +493,9 @@ if os.path.exists(info_plist_path):
 
         # High-DPI support
         plist['NSHighResolutionCapable'] = True
+
+        # Prevent multiple app instances (defense in depth for subprocess handling)
+        plist['LSMultipleInstancesProhibited'] = True
 
         # Team ID for notarization
         if SIGN_APP:

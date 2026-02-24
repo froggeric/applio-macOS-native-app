@@ -10,7 +10,8 @@ Applio is a voice conversion application built on RVC (Retrieval-Based Voice Con
 
 ```bash
 # Installation
-./run-install.sh              # Linux/macOS
+./run-install.sh              # Cross-platform (Python 3.12, creates .venv)
+./install_applio_mac.sh       # macOS native (Python 3.10, creates venv_macos)
 run-install.bat               # Windows
 
 # Running (Gradio web UI)
@@ -23,6 +24,12 @@ python app.py --port 8080     # Custom port
 # macOS Native App
 python macos_wrapper.py       # Run with native window
 python build_macos.py         # Build .app bundle → dist/Applio.app
+
+# Build options (combine as needed):
+python build_macos.py --lite          # Lite build (~820MB, no bundled models)
+python build_macos.py --dmg           # Create DMG installer after build
+python build_macos.py --sign          # Sign with Developer ID
+python build_macos.py --notarize      # Notarize with Apple (requires --sign)
 
 # TensorBoard (training monitoring)
 ./run-tensorboard.sh          # Linux/macOS
@@ -59,6 +66,10 @@ assets/
 
 | Purpose | File |
 |---------|------|
+| macOS installer | `install_applio_mac.sh` |
+| 44.1kHz patch | `patches/patch_train_44100.py` |
+| Code signing config | `assets/entitlements.plist` |
+| Fork differences | `FORK_DIFFERENCES.md` |
 | Main entry point | `app.py` |
 | Core function exports | `core.py` |
 | Voice conversion logic | `rvc/infer/infer.py` (VoiceConverter class) |
@@ -91,17 +102,39 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 
 ## Platform Notes
 
+**Python Version Requirements:**
+| Context | Python | Virtual Env |
+|---------|--------|-------------|
+| `install_applio_mac.sh` | 3.10 | `venv_macos` |
+| `build_macos.py` | 3.10 | `venv_macos` |
+| `run-install.sh` | 3.12 | `.venv` |
+| `run-applio.sh` | 3.12 | `.venv` |
+
+**Important:** PyInstaller builds require Python 3.10 (3.12+ has compatibility issues).
+
 **macOS Development:**
 - Use `requirements_macos.txt` (includes pywebview, pyinstaller, pyobjc)
 - PyTorch uses MPS (Metal Performance Shaders) on Apple Silicon
-- Python 3.10 required for build (3.12+ has PyInstaller compatibility issues)
 - Install `setuptools<70` for pkg_resources support
 - First run downloads ~300MB models (600s timeout in wrapper)
-- User data: `~/Library/Application Support/Applio/`, logs: `~/Library/Logs/Applio/`
+- User data: `~/Library/Application Support/Applio/` (cache), external path for models/training
+- Logs: `~/Library/Logs/Applio/`
 - Key environment variables in `macos_wrapper.py`:
   - `PYTORCH_ENABLE_MPS_FALLBACK=1`
   - `GRADIO_TEMP_DIR=~/Library/Caches/Applio/gradio`
   - `HF_HOME=~/Library/Application Support/Applio/huggingface`
+
+**External Data Storage:**
+- First-run prompts user to select data location via native macOS folder dialog
+- Preferences stored in NSUserDefaults (`com.iahispano.applio`)
+- Default location: `~/Applio/`
+- Build-time patcher (`patches/patch_data_paths.py`) redirects `core.py`'s `logs_path` to use `now_dir`
+- Menu: File → Set Data Location..., Open in Finder (various subfolders)
+
+**Subprocess Script Path Resolution:**
+- Script execution mode in `macos_wrapper.py` searches BASE_PATH as fallback
+- Required because scripts (in app bundle) won't exist in DATA_PATH (user data location)
+- Scripts found at `os.path.join(BASE_PATH, script_relative_path)` when not in cwd
 
 **Build outputs:**
 - `build/` - PyInstaller intermediate files
@@ -147,6 +180,11 @@ Checkpoints in logs/{model_name}/
 **Adding new models:**
 1. Add entry to `assets/pretrains_macos_additions.json` (format: `{"ModelName": {"48k": {"D": "url", "G": "url"}}}`)
 2. For new sample rates, create `rvc/configs/{rate}.json` and add to `version_config_paths` in `config.py`
+
+**44.1kHz Sample Rate (macOS fork only):**
+- Config: `rvc/configs/44100.json`
+- Applied at build time via `patches/patch_train_44100.py`
+- Modifies `tabs/train/train.py` to add 44100 Hz option
 
 **Recovering deleted HuggingFace files:**
 ```
