@@ -7,8 +7,8 @@ Usage:
     python build_macos.py --dmg        # Also create DMG installer
     python build_macos.py --sign --dmg # Signed DMG for distribution
     python build_macos.py --sign --dmg --notarize  # Full release build
-    python build_macos.py --models-pkg # Build models-only PKG installer
-    python build_macos.py --models-pkg --sign # Signed models-only PKG
+    python build_macos.py --models-installer  # Build models installer app
+    python build_macos.py --models-installer --sign  # Signed models installer
 
 Build mode:
     Lite build (default): User data stored externally, models download on first launch
@@ -100,9 +100,9 @@ def parse_args():
         help="Notarize app with Apple (requires --sign)"
     )
     parser.add_argument(
-        "--models-pkg",
+        "--models-installer",
         action="store_true",
-        help="Build models-only PKG installer (downloads models to user's data location)"
+        help="Build standalone models installer app (bundles all models)"
     )
     parser.add_argument(
         "--apple-id",
@@ -118,7 +118,7 @@ LITE_MODE = args.lite
 CREATE_DMG = args.dmg
 SIGN_APP = args.sign
 NOTARIZE = args.notarize
-MODELS_PKG = args.models_pkg
+MODELS_INSTALLER = args.models_installer
 VERSION = f"{APPLIO_VERSION}.{args.build_number}"
 
 # Validate arguments
@@ -146,12 +146,38 @@ def clean_dir(path):
 # =================================================================
 # Build Models Installer PKG
 # =================================================================
-def build_models_installer_pkg():
-    """Build the models-only PKG installer."""
+def build_models_installer_app():
+    """Build the models installer app.
+
+    Creates a standalone .app that copies bundled models to the user's
+    Applio data location. No PKG/DMG - just the .app.
+    """
     installer_app_name = "ApplioModelsInstaller"
     installer_entry = "models_installer.py"
 
-    print("Building ApplioModelsInstaller app...")
+    print("Building Applio Models Installer app...")
+    print("(Standalone .app - run it to install models)")
+
+    # Verify models exist
+    models_dir = "rvc/models"
+    if not os.path.exists(models_dir):
+        print(f"ERROR: Models directory not found at {models_dir}")
+        return None
+
+    # Count model files
+    model_files = []
+    for root, dirs, files in os.walk(models_dir):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if not f.startswith('.'):
+                model_files.append(os.path.join(root, f))
+
+    if not model_files:
+        print(f"ERROR: No model files found in {models_dir}")
+        return None
+
+    total_size = sum(os.path.getsize(f) for f in model_files) / 1024 / 1024
+    print(f"Bundling {len(model_files)} model files ({total_size:.1f} MB)")
 
     # PyInstaller arguments for the installer app
     installer_args = [
@@ -159,7 +185,6 @@ def build_models_installer_pkg():
         f"--name={installer_app_name}",
         "--windowed",
         "--noconfirm",
-        "--clean",
         f"--icon={ICON_FILE}",
         "--target-arch=arm64",
         "--osx-bundle-identifier=com.iahispano.applio.models-installer",
@@ -192,6 +217,8 @@ def build_models_installer_pkg():
 
             plist['CFBundleShortVersionString'] = VERSION
             plist['CFBundleVersion'] = VERSION
+            plist['CFBundleDisplayName'] = "Applio Models Installer"
+            plist['CFBundleName'] = "Applio Models Installer"
             plist['NSHumanReadableCopyright'] = f"Copyright © 2026 IAHispano. All rights reserved."
 
             with open(info_plist_path, 'wb') as f:
@@ -224,53 +251,29 @@ def build_models_installer_pkg():
         else:
             print(f"  WARNING: Ad-hoc signing failed: {result.stderr}")
 
-    # Create PKG installer
-    print("\nCreating PKG installer...")
-    pkg_name = f"ApplioModels-{VERSION}.pkg"
-    pkg_path = os.path.join("dist", pkg_name)
+    # Get app size
+    app_size = sum(
+        os.path.getsize(os.path.join(root, f))
+        for root, dirs, files in os.walk(installer_app_path)
+        for f in files
+    ) / 1024 / 1024
+    print(f"\nInstaller app size: {app_size:.1f} MB")
 
-    # Remove existing PKG if present
-    if os.path.exists(pkg_path):
-        os.remove(pkg_path)
-
-    # Use pkgbuild to create the installer
-    # The installer app will be placed in /Applications when installed
-    # Note: pkgbuild doesn't support ad-hoc signing ("-"), only real identities
-    pkgbuild_cmd = [
-        "pkgbuild",
-        "--install-location", "/Applications",
-        "--component", installer_app_path,
-    ]
-    if SIGN_APP:
-        pkgbuild_cmd.extend(["--sign", DEVELOPER_IDENTITY])
-    pkgbuild_cmd.append(pkg_path)
-
-    result = subprocess.run(pkgbuild_cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(f"ERROR: PKG creation failed: {result.stderr}")
-        return None
-
-    # Get PKG size
-    pkg_size = os.path.getsize(pkg_path) / 1024 / 1024
-    print(f"  PKG created: {pkg_path}")
-    print(f"  Size: {pkg_size:.1f} MB")
-
-    return pkg_path
+    return installer_app_path
 
 
-# If building models PKG only, skip app build
-if MODELS_PKG:
+# If building models installer only, skip main app build
+if MODELS_INSTALLER:
     print("=" * 60)
     print(f"Applio Models Installer Build - {VERSION}")
     print("=" * 60)
     print()
 
-    clean_dir("dist")
+    # Only clean build directory - preserve dist/ to keep main app
     clean_dir("build")
 
     # Build the models installer app
-    build_models_installer_pkg()
+    build_models_installer_app()
 
     print("\n" + "=" * 60)
     print("MODELS INSTALLER BUILD COMPLETE")
@@ -589,6 +592,25 @@ def apply_patches():
             print(f"    WARNING: Multiprocessing patcher not found at {mp_patcher_path}")
     else:
         print(f"  WARNING: Bundled extract.py not found at {bundled_extract_py}")
+
+    # Patch static resources (i18n, themes) to use APPLIO_BASE_PATH
+    frameworks_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks")
+    static_patcher_path = "patches/patch_static_resources.py"
+    if os.path.exists(static_patcher_path):
+        print(f"  Patching: static resources to use APPLIO_BASE_PATH...")
+        static_result = subprocess.run(
+            [sys.executable, static_patcher_path, frameworks_path],
+            capture_output=True,
+            text=True
+        )
+        if static_result.stdout:
+            for line in static_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+        if static_result.returncode != 0:
+            print(f"    WARNING: patch_static_resources.py returned non-zero")
+    else:
+        print(f"  WARNING: Static resources patcher not found at {static_patcher_path}")
 
     return True
 
