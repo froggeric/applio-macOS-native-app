@@ -75,6 +75,46 @@ python build_macos.py --sign --dmg --notarize
 
 Output: `dist/Applio-{version}.dmg`
 
+## Models-Only Installer
+
+For users who want to pre-install all models before launching the main app (or for preservation/offline use), you can create a standalone PKG installer that bundles all models from the project directory:
+
+```bash
+# Basic PKG (unsigned, for personal use)
+python build_macos.py --models-pkg
+
+# Signed PKG for distribution
+python build_macos.py --models-pkg --sign
+```
+
+Output: `dist/ApplioModels-{version}.pkg` (~5.3 GB)
+
+### How it Works
+
+1. Bundles all models from `rvc/models/` into the installer (~5.8 GB)
+2. When launched, reads the user's existing Applio preferences
+3. If no preferences exist, prompts user to select a data location
+4. Copies all bundled models to the selected location
+5. Models are placed in the correct structure for the main app to use
+
+### Use Cases
+
+- **Offline installation** - No internet required after downloading the PKG
+- **Preservation** - Models are bundled, protecting against upstream removal
+- **Faster setup** - No ~2GB download on first app launch
+- **Multiple machines** - Install once, copy PKG to other machines
+
+### Included Models (22 files, ~5.8 GB)
+
+| Category | Sample Rate | Models |
+|----------|-------------|--------|
+| **HiFi-GAN Default** | 32k, 40k, 48k | f0D32k, f0G32k, f0D40k, f0G40k, f0D48k, f0G48k |
+| **HiFi-GAN Custom** | 48k | KLM49 (D+G), TITAN_Medium (D+G) |
+| **RefineGAN Default** | 24k, 32k | f0D24k, f0G24k, f0D32k, f0G32k |
+| **RefineGAN Custom** | 44k | KLM50_exp1 (D+G), VCTK_v1 (D+G) |
+| **F0 Predictors** | - | rmvpe.pt, fcpe.pt |
+| **Embedders** | - | contentvec (pytorch_model.bin, config.json) |
+
 ## Code Signing & Notarization
 
 ### Prerequisites
@@ -125,6 +165,8 @@ Output: `dist/Applio-{version}.dmg`
 | Signed app | `python build_macos.py --sign` |
 | Signed DMG | `python build_macos.py --sign --dmg` |
 | Notarized release DMG | `python build_macos.py --sign --dmg --notarize` |
+| Models-only PKG | `python build_macos.py --models-pkg` |
+| Signed models PKG | `python build_macos.py --models-pkg --sign` |
 
 ### For GitHub Releases
 
@@ -137,11 +179,12 @@ python build_macos.py --sign --dmg --notarize
 
 ## Build Output
 
-| Output | Size |
-|--------|------|
-| `dist/Applio.app` | ~850MB |
-| `dist/Applio-{version}.dmg` | ~850MB |
-| `build/` | PyInstaller intermediates (can be deleted) |
+| Output | Size | Notes |
+|--------|------|-------|
+| `dist/Applio.app` | ~820MB | LITE mode, models download on first launch |
+| `dist/Applio-{version}.dmg` | ~820MB | Signed/notarized DMG for distribution |
+| `dist/ApplioModels-{version}.pkg` | ~5.3GB | All models bundled, no download needed |
+| `build/` | - | PyInstaller intermediates (can be deleted) |
 
 ## File Locations
 
@@ -300,15 +343,21 @@ This fork maintains minimal delta from upstream by patching at build time:
 
 | File | Purpose |
 |------|---------|
-| `build_macos.py` | Main build script |
-| `macos_wrapper.py` | Native window wrapper |
-| `Applio.spec` | PyInstaller configuration (generated) |
-| `patches/patch_train_44100.py` | 44100 Hz UI patcher |
-| `patches/download_pretraineds.py` | Custom model downloader |
-| `assets/pretrains_macos_additions.json` | Additional pretrained models |
+| `build_macos.py` | Main build script (app, DMG, PKG, models installer) |
+| `macos_wrapper.py` | Native window wrapper with external data location |
+| `models_installer.py` | Standalone models installer (copies bundled models) |
+| `install_applio_mac.sh` | Standalone installation script |
+| `Applio.spec` | PyInstaller config (generated, gitignored) |
+| `ApplioModelsInstaller.spec` | Models installer PyInstaller config (generated) |
+| `patches/patch_train_44100.py` | Adds 44100 Hz option to training UI |
+| `patches/patch_data_paths.py` | Redirects logs_path to external data location |
+| `patches/download_pretraineds.py` | Downloads custom pretrained models |
+| `assets/pretrains_macos_additions.json` | Additional pretrained model definitions |
 | `assets/entitlements.plist` | Code signing entitlements |
+| `assets/loading.html` | Loading screen HTML |
 | `requirements_macos.txt` | macOS-specific dependencies |
 | `README_MACOS.md` | This documentation |
+| `FORK_DIFFERENCES.md` | Fork vs upstream documentation |
 
 ## Entitlements
 

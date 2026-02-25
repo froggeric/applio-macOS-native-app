@@ -7,9 +7,12 @@ Usage:
     python build_macos.py --dmg        # Also create DMG installer
     python build_macos.py --sign --dmg # Signed DMG for distribution
     python build_macos.py --sign --dmg --notarize  # Full release build
+    python build_macos.py --models-pkg # Build models-only PKG installer
+    python build_macos.py --models-pkg --sign # Signed models-only PKG
 
 Build mode:
     Lite build (default): User data stored externally, models download on first launch
+    Models PKG: Standalone installer that downloads all pretrained models
 
 Signing & Notarization:
     --sign:           Sign with Developer ID certificate
@@ -75,83 +78,6 @@ def parse_args():
         default=True,
         help="Lite build - models download on first launch (default)",
     )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
-    # Lite mode is now the default - all user data stored externally
-    parser.add_argument(
-        "--lite",
-        action="store_true",
-        default=True,
-        help="Lite build - models download on first launch (default)",
-    )
     parser.add_argument(
         "--build-number",
         type=int,
@@ -174,6 +100,11 @@ def parse_args():
         help="Notarize app with Apple (requires --sign)"
     )
     parser.add_argument(
+        "--models-pkg",
+        action="store_true",
+        help="Build models-only PKG installer (downloads models to user's data location)"
+    )
+    parser.add_argument(
         "--apple-id",
         type=str,
         default="frederic@guigand.com",
@@ -187,6 +118,7 @@ LITE_MODE = args.lite
 CREATE_DMG = args.dmg
 SIGN_APP = args.sign
 NOTARIZE = args.notarize
+MODELS_PKG = args.models_pkg
 VERSION = f"{APPLIO_VERSION}.{args.build_number}"
 
 # Validate arguments
@@ -211,8 +143,141 @@ def clean_dir(path):
         os.system(f"rm -rf {path}")
 
 
-clean_dir("dist")
-clean_dir("build")
+# =================================================================
+# Build Models Installer PKG
+# =================================================================
+def build_models_installer_pkg():
+    """Build the models-only PKG installer."""
+    installer_app_name = "ApplioModelsInstaller"
+    installer_entry = "models_installer.py"
+
+    print("Building ApplioModelsInstaller app...")
+
+    # PyInstaller arguments for the installer app
+    installer_args = [
+        installer_entry,
+        f"--name={installer_app_name}",
+        "--windowed",
+        "--noconfirm",
+        "--clean",
+        f"--icon={ICON_FILE}",
+        "--target-arch=arm64",
+        "--osx-bundle-identifier=com.iahispano.applio.models-installer",
+        "--hidden-import=Foundation",
+        "--hidden-import=AppKit",
+        "--hidden-import=requests",
+        "--hidden-import=tqdm",
+        # Bundle the entire rvc/models directory (pretraineds, embedders, predictors)
+        "--add-data=rvc/models:rvc/models",
+    ]
+
+    PyInstaller.__main__.run(installer_args)
+
+    installer_app_path = os.path.join("dist", f"{installer_app_name}.app")
+
+    if not os.path.exists(installer_app_path):
+        print(f"ERROR: Installer app not created at {installer_app_path}")
+        return None
+
+    print(f"Installer app created: {installer_app_path}")
+
+    # Patch Info.plist
+    info_plist_path = os.path.join(installer_app_path, "Contents", "Info.plist")
+    if os.path.exists(info_plist_path):
+        print("Patching installer Info.plist...")
+        try:
+            import plistlib
+            with open(info_plist_path, 'rb') as f:
+                plist = plistlib.load(f)
+
+            plist['CFBundleShortVersionString'] = VERSION
+            plist['CFBundleVersion'] = VERSION
+            plist['NSHumanReadableCopyright'] = f"Copyright © 2026 IAHispano. All rights reserved."
+
+            with open(info_plist_path, 'wb') as f:
+                plistlib.dump(plist, f)
+            print(f"  Info.plist patched (version: {VERSION})")
+        except Exception as e:
+            print(f"  WARNING: Failed to patch Info.plist: {e}")
+
+    # Sign the installer app
+    if SIGN_APP:
+        print("\nSigning installer app with Developer ID certificate...")
+        result = subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", DEVELOPER_IDENTITY,
+             "--options", "runtime", "--timestamp", installer_app_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print("  Installer app signed successfully.")
+        else:
+            print(f"  WARNING: Signing failed: {result.stderr}")
+    else:
+        # Ad-hoc signing
+        print("\nSigning installer app (ad-hoc)...")
+        result = subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", installer_app_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print("  Installer app signed (ad-hoc).")
+        else:
+            print(f"  WARNING: Ad-hoc signing failed: {result.stderr}")
+
+    # Create PKG installer
+    print("\nCreating PKG installer...")
+    pkg_name = f"ApplioModels-{VERSION}.pkg"
+    pkg_path = os.path.join("dist", pkg_name)
+
+    # Remove existing PKG if present
+    if os.path.exists(pkg_path):
+        os.remove(pkg_path)
+
+    # Use pkgbuild to create the installer
+    # The installer app will be placed in /Applications when installed
+    # Note: pkgbuild doesn't support ad-hoc signing ("-"), only real identities
+    pkgbuild_cmd = [
+        "pkgbuild",
+        "--install-location", "/Applications",
+        "--component", installer_app_path,
+    ]
+    if SIGN_APP:
+        pkgbuild_cmd.extend(["--sign", DEVELOPER_IDENTITY])
+    pkgbuild_cmd.append(pkg_path)
+
+    result = subprocess.run(pkgbuild_cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"ERROR: PKG creation failed: {result.stderr}")
+        return None
+
+    # Get PKG size
+    pkg_size = os.path.getsize(pkg_path) / 1024 / 1024
+    print(f"  PKG created: {pkg_path}")
+    print(f"  Size: {pkg_size:.1f} MB")
+
+    return pkg_path
+
+
+# If building models PKG only, skip app build
+if MODELS_PKG:
+    print("=" * 60)
+    print(f"Applio Models Installer Build - {VERSION}")
+    print("=" * 60)
+    print()
+
+    clean_dir("dist")
+    clean_dir("build")
+
+    # Build the models installer app
+    build_models_installer_pkg()
+
+    print("\n" + "=" * 60)
+    print("MODELS INSTALLER BUILD COMPLETE")
+    print("=" * 60)
+    sys.exit(0)
+
+
 
 
 # =================================================================
