@@ -33,7 +33,7 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
 
     # Pattern to find the subprocess.run call and return statement
     # Use \s* for flexible whitespace handling
-    old_pattern = r'subprocess\.run\(command\)\s*\n(\s*)return f"Model \{model_name\} preprocessed successfully\.'
+    old_pattern = r'subprocess\.run\(command\)\s*\n(\s*)return f"Model \{model_name\} preprocessed successfully\."'
 
     # Check if already patched by looking for our idempotency marker
     if idempotency_marker in content:
@@ -94,7 +94,7 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
 
     # Pattern to find the subprocess.run call and return statement
     # Use \s* for flexible whitespace handling
-    old_pattern = r'subprocess\.run\(command_1\)\s*\n\s*\n(\s*)return f"Model \{model_name\} extracted successfully\.'
+    old_pattern = r'subprocess\.run\(command_1\)\s*\n\s*\n(\s*)return f"Model \{model_name\} extracted successfully\."'
 
     # Check if already patched by looking for our idempotency marker
     if idempotency_marker in content:
@@ -162,7 +162,7 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
     # Validation code to insert
     # Note: The idempotency marker "# Validate preprocessing and extraction before training" must match the check above
     # Use the captured indentation (\2) to maintain consistent formatting
-    validation_code = r'''# Validate preprocessing and extraction before training
+    validation_code = r'''\2# Validate preprocessing and extraction before training
 \2model_dir = os.path.join(logs_path, model_name)
 \2model_info_path = os.path.join(model_dir, "model_info.json")
 
