@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Applio is a voice conversion application built on RVC (Retrieval-Based Voice Conversion). It provides a Gradio web interface for training voice models, performing inference, text-to-speech, and real-time voice conversion. The project supports macOS native app packaging via PyInstaller.
 
+## Efficiency Notes
+
+**Use interminai for file edits >100 lines** - Edit tool consumes ~10 tokens/line; interminai has fixed ~300 token overhead. See global `~/.claude/CLAUDE.md` for vim workflow patterns.
+
 ## Build and Run Commands
 
 ```bash
