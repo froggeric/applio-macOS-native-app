@@ -537,6 +537,23 @@ def apply_patches():
                 print(f"    WARNING: Data paths patcher returned {dp_result.returncode}")
         else:
             print(f"    WARNING: Data paths patcher not found at {data_paths_patcher}")
+
+        # Patch 1b: core.py - add subprocess validation for training pipeline
+        print(f"  Patching subprocess validation in core.py...")
+        subprocess_patcher_path = "patches/patch_subprocess_validation.py"
+        if os.path.exists(subprocess_patcher_path):
+            sv_result = subprocess.run(
+                [sys.executable, subprocess_patcher_path, os.path.dirname(bundled_core_py)],
+                capture_output=True,
+                text=True
+            )
+            for line in sv_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+            if sv_result.returncode != 0:
+                print(f"    WARNING: Subprocess validation patcher returned {sv_result.returncode}")
+        else:
+            print(f"    WARNING: Subprocess validation patcher not found at {subprocess_patcher_path}")
     else:
         print(f"  WARNING: Bundled core.py not found at {bundled_core_py}")
 
