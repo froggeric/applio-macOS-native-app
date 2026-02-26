@@ -37,7 +37,7 @@ from pathlib import Path
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-BUILD_NUMBER = 1  # Increment for each build
+BUILD_NUMBER = 2  # Increment for each build
 
 # Read version from assets/config.json
 def get_applio_version():
