@@ -31,6 +31,7 @@ except ImportError:
 # Configuration
 # =================================================================
 
+# Use the same domain as the main Applio app to share preferences
 PREFERENCES_DOMAIN = "com.iahispano.applio"
 KEY_DATA_PATH = "userDataPath"
 KEY_FIRST_RUN_DONE = "firstRunCompleted"
@@ -62,11 +63,15 @@ logger = logging.getLogger(__name__)
 # =================================================================
 
 class PreferencesManager:
-    """Manages user preferences using macOS NSUserDefaults."""
+    """Manages user preferences using macOS NSUserDefaults.
+
+    Uses the main Applio app's preferences domain to share settings.
+    """
 
     def __init__(self):
         if NATIVE_APIS_AVAILABLE:
-            self.defaults = NSUserDefaults.standardUserDefaults()
+            # Use the main app's preferences domain (not the installer's own domain)
+            self.defaults = NSUserDefaults.alloc().initWithSuiteName_(PREFERENCES_DOMAIN)
         else:
             self.defaults = None
 
@@ -118,6 +123,7 @@ def select_data_folder(default_path: str = None) -> str | None:
     panel.setCanChooseFiles_(False)
     panel.setCanChooseDirectories_(True)
     panel.setAllowsMultipleSelection_(False)
+    panel.setCanCreateDirectories_(True)
     panel.setTitle_("Select Applio Data Location")
     panel.setPrompt_("Select")
     panel.setMessage_("Choose where Applio stores models, datasets, and training data.")
@@ -306,6 +312,39 @@ def install_models(data_path: str, cli_mode: bool = False) -> bool:
 # Main Entry Point
 # =================================================================
 
+def confirm_location(data_path: str) -> bool:
+    """
+    Show confirmation dialog for installation location.
+
+    Args:
+        data_path: The data path to confirm
+
+    Returns:
+        True if user confirms, False if they want to change
+    """
+    if not NATIVE_APIS_AVAILABLE:
+        return True
+
+    from AppKit import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
+
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Install Applio Models")
+    alert.setInformativeText_(f"Models will be installed to:\n\n{data_path}\n\nClick 'Select Different Location' to choose another folder, or 'Install Here' to proceed.")
+    alert.addButtonWithTitle_("Install Here")
+    alert.addButtonWithTitle_("Select Different Location")
+    alert.addButtonWithTitle_("Cancel")
+    alert.setAlertStyle_(1)  # NSAlertStyleInformational
+
+    response = alert.runModal()
+
+    if response == NSAlertFirstButtonReturn:  # Install Here
+        return True
+    elif response == NSAlertSecondButtonReturn:  # Select Different Location
+        return False
+    else:  # Cancel
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Install Applio pretrained models",
@@ -348,7 +387,25 @@ def main():
         print(f"Data location set to: {data_path}")
 
     else:
-        print(f"Using existing data location: {data_path}")
+        # Existing preferences found - show confirmation dialog
+        print(f"Found existing data location: {data_path}")
+
+        if not cli_mode:
+            confirmed = confirm_location(data_path)
+
+            if confirmed is None:  # Cancel
+                print("Installation cancelled.")
+                sys.exit(0)
+            elif confirmed is False:  # Select Different Location
+                print("Please select a new location...")
+                new_path = select_data_folder(data_path)
+                if not new_path:
+                    print("Installation cancelled.")
+                    sys.exit(1)
+                data_path = new_path
+                prefs.set_data_path(data_path)
+                print(f"Data location updated to: {data_path}")
+            # else: confirmed is True, proceed with existing path
 
     success = install_models(data_path, cli_mode)
 

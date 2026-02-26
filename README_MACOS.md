@@ -75,36 +75,44 @@ python build_macos.py --sign --dmg --notarize
 
 Output: `dist/Applio-{version}.dmg`
 
-## Models-Only Installer
+## Models Installer App
 
-For users who want to pre-install all models before launching the main app (or for preservation/offline use), you can create a standalone PKG installer that bundles all models from the project directory:
+For users who want to pre-install all models before launching the main app (or for preservation/offline use), you can create a standalone installer app that bundles all models from the project directory:
 
 ```bash
-# Basic PKG (unsigned, for personal use)
-python build_macos.py --models-pkg
+# Build the models installer app
+python build_macos.py --models-installer
 
-# Signed PKG for distribution
-python build_macos.py --models-pkg --sign
+# Signed version for distribution
+python build_macos.py --models-installer --sign
 ```
 
-Output: `dist/ApplioModels-{version}.pkg` (~5.3 GB)
+Output: `dist/ApplioModelsInstaller.app` (~6.2 GB)
+
+**Note:** The models installer is a standalone .app - no DMG, PKG, or archive needed. Just distribute the .app directly.
 
 ### How it Works
 
-1. Bundles all models from `rvc/models/` into the installer (~5.8 GB)
-2. When launched, reads the user's existing Applio preferences
-3. If no preferences exist, prompts user to select a data location
+1. Double-click `ApplioModelsInstaller.app` to run
+2. If you've run Applio before, it shows your existing data location and asks for confirmation
+3. If not, it prompts you to select where to store models (with "New Folder" button)
 4. Copies all bundled models to the selected location
-5. Models are placed in the correct structure for the main app to use
+5. Done - launch Applio and start using voice conversion
+
+### Shared Preferences
+
+Both `Applio.app` and `ApplioModelsInstaller.app` share the same preferences domain (`com.iahispano.applio`), so:
+- Running the installer after using Applio will show your existing location
+- Running the installer first will pre-configure Applio's data location
 
 ### Use Cases
 
-- **Offline installation** - No internet required after downloading the PKG
+- **Offline installation** - No internet required after downloading the app
 - **Preservation** - Models are bundled, protecting against upstream removal
 - **Faster setup** - No ~2GB download on first app launch
-- **Multiple machines** - Install once, copy PKG to other machines
+- **Multiple machines** - Copy the installer app to other machines
 
-### Included Models (22 files, ~5.8 GB)
+### Included Models (21 files, ~5.8 GB)
 
 | Category | Sample Rate | Models |
 |----------|-------------|--------|
@@ -165,8 +173,8 @@ Output: `dist/ApplioModels-{version}.pkg` (~5.3 GB)
 | Signed app | `python build_macos.py --sign` |
 | Signed DMG | `python build_macos.py --sign --dmg` |
 | Notarized release DMG | `python build_macos.py --sign --dmg --notarize` |
-| Models-only PKG | `python build_macos.py --models-pkg` |
-| Signed models PKG | `python build_macos.py --models-pkg --sign` |
+| Models installer app | `python build_macos.py --models-installer` |
+| Signed models installer | `python build_macos.py --models-installer --sign` |
 
 ### For GitHub Releases
 
@@ -183,8 +191,10 @@ python build_macos.py --sign --dmg --notarize
 |--------|------|-------|
 | `dist/Applio.app` | ~820MB | LITE mode, models download on first launch |
 | `dist/Applio-{version}.dmg` | ~820MB | Signed/notarized DMG for distribution |
-| `dist/ApplioModels-{version}.pkg` | ~5.3GB | All models bundled, no download needed |
+| `dist/ApplioModelsInstaller.app` | ~6.2GB | Bundled models installer (standalone .app) |
 | `build/` | - | PyInstaller intermediates (can be deleted) |
+
+**Note:** You can build the models installer without deleting the main app - both can coexist in `dist/`.
 
 ## File Locations
 
@@ -195,6 +205,8 @@ On first launch, the app prompts for a data storage location. This location stor
 Default: `~/Applio/`
 
 Preferences stored in: `~/Library/Preferences/com.iahispano.applio.plist`
+
+**Note:** Both `Applio.app` and `ApplioModelsInstaller.app` share this preferences file, allowing the installer to use your existing data location.
 
 ### Cache Locations (Fixed)
 
@@ -223,15 +235,26 @@ The user data location contains:
 │   ├── datasets/                   # Training datasets
 │   ├── audios/                     # Inference outputs
 │   └── presets/                    # Effect presets
-└── rvc/models/
-    ├── pretraineds/                 # Pretrained models
-    │   ├── hifi-gan/               # HiFi-GAN vocoders
-    │   ├── refinegan/               # RefineGAN vocoders
-    │   └── custom/                  # Downloaded community models
-    ├── embedders/                   # ContentVec embedders
-    ├── predictors/                  # F0 predictors (rmvpe.pt, fcpe.pt)
-    └── formant/                     # Formant shift models
+└── rvc/
+    ├── configs/                    # Sample rate configs (copied at startup)
+    │   ├── 24000.json
+    │   ├── 32000.json
+    │   ├── 40000.json
+    │   ├── 44100.json
+    │   └── 48000.json
+    ├── lib/tools/
+    │   └── tts_voices.json         # TTS voice list (copied at startup)
+    └── models/
+        ├── pretraineds/             # Pretrained models
+        │   ├── hifi-gan/           # HiFi-GAN vocoders
+        │   ├── refinegan/           # RefineGAN vocoders
+        │   └── custom/              # Downloaded community models
+        ├── embedders/               # ContentVec embedders
+        ├── predictors/              # F0 predictors (rmvpe.pt, fcpe.pt)
+        └── formant/                 # Formant shift models
 ```
+
+**Note:** Static resources (configs, tts_voices.json) are copied from the app bundle to the user data location on first launch. This avoids modifying upstream code while ensuring relative paths work after the working directory change.
 
 ### Changing Data Location
 
@@ -336,16 +359,17 @@ This fork maintains minimal delta from upstream by patching at build time:
 | Pretrained merging | `build_macos.py` | Merges upstream `pretrains.json` + `assets/pretrains_macos_additions.json` |
 | App bundling | `build_macos.py` | PyInstaller build with signing, DMG, notarization |
 | Native wrapper | `macos_wrapper.py` | PyWebview native macOS window with external data location support |
+| Static resources | `macos_wrapper.py` | Copies configs and tts_voices.json to user data at startup |
 
-**No upstream source files are modified** - all changes happen during the build process.
+**No upstream source files are modified** - all changes happen during the build process or at runtime startup.
 
 ### Fork-Only Files
 
 | File | Purpose |
 |------|---------|
-| `build_macos.py` | Main build script (app, DMG, PKG, models installer) |
+| `build_macos.py` | Main build script (app, DMG, models installer) |
 | `macos_wrapper.py` | Native window wrapper with external data location |
-| `models_installer.py` | Standalone models installer (copies bundled models) |
+| `models_installer.py` | Standalone models installer (shares preferences with main app) |
 | `install_applio_mac.sh` | Standalone installation script |
 | `Applio.spec` | PyInstaller config (generated, gitignored) |
 | `ApplioModelsInstaller.spec` | Models installer PyInstaller config (generated) |

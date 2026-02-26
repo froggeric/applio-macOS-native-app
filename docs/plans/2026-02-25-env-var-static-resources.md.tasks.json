@@ -1,0 +1,12 @@
+{
+  "planPath": "docs/plans/2026-02-25-env-var-static-resources.md",
+  "tasks": [
+    {"id": 14, "subject": "Task 1: Create patch_static_resources.py", "status": "pending"},
+    {"id": 15, "subject": "Task 2: Set APPLIO_BASE_PATH in macos_wrapper.py", "status": "pending"},
+    {"id": 16, "subject": "Task 3: Update build_macos.py to apply patcher", "status": "pending", "blockedBy": [14]},
+    {"id": 17, "subject": "Task 4: Remove copy-based approach", "status": "pending", "blockedBy": [15]},
+    {"id": 18, "subject": "Task 5: Build and test", "status": "pending", "blockedBy": [16, 17]},
+    {"id": 19, "subject": "Task 6: Update documentation", "status": "pending", "blockedBy": [18]}
+  ],
+  "lastUpdated": "2026-02-25T16:30:00Z"
+}

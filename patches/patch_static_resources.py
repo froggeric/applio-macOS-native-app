@@ -266,6 +266,46 @@ def patch_settings_sections(base_path: str) -> bool:
     return all_success
 
 
+def patch_core_py(base_path: str) -> bool:
+    """
+    Patch core.py to use APPLIO_BASE_PATH for:
+    - rvc/lib/tools/tts_voices.json (relative path, no now_dir)
+    """
+    file_path = os.path.join(base_path, "core.py")
+
+    patterns = [
+        # os.path.join("rvc", "lib", "tools", "tts_voices.json") - relative path
+        # Use "or ." instead of default arg to handle empty string case
+        (
+            r'os\.path\.join\("rvc",\s*"lib",\s*"tools",\s*"tts_voices\.json"\)',
+            'os.path.join(os.environ.get("APPLIO_BASE_PATH") or ".", "rvc", "lib", "tools", "tts_voices.json")',
+        ),
+    ]
+
+    success, _ = patch_file(file_path, patterns, "core.py")
+    return success
+
+
+def patch_tts_tab(base_path: str) -> bool:
+    """
+    Patch tabs/tts/tts.py to use APPLIO_BASE_PATH for:
+    - rvc/lib/tools/tts_voices.json (relative path, no now_dir)
+    """
+    file_path = os.path.join(base_path, "tabs", "tts", "tts.py")
+
+    patterns = [
+        # os.path.join("rvc", "lib", "tools", "tts_voices.json") - relative path
+        # Use "or ." instead of default arg to handle empty string case
+        (
+            r'os\.path\.join\("rvc",\s*"lib",\s*"tools",\s*"tts_voices\.json"\)',
+            'os.path.join(os.environ.get("APPLIO_BASE_PATH") or ".", "rvc", "lib", "tools", "tts_voices.json")',
+        ),
+    ]
+
+    success, _ = patch_file(file_path, patterns, "tabs/tts/tts.py")
+    return success
+
+
 def patch_all(base_path: str) -> bool:
     """
     Apply all static resource patches.
@@ -291,6 +331,8 @@ def patch_all(base_path: str) -> bool:
     results.append(("tabs/report/report.py", patch_report(base_path)))
     results.append(("tabs/plugins/plugins_core.py", patch_plugins_core(base_path)))
     results.append(("tabs/settings/sections/*.py", patch_settings_sections(base_path)))
+    results.append(("core.py", patch_core_py(base_path)))
+    results.append(("tabs/tts/tts.py", patch_tts_tab(base_path)))
 
     print("-" * 60)
 

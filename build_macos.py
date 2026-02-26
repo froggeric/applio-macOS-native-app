@@ -593,24 +593,8 @@ def apply_patches():
     else:
         print(f"  WARNING: Bundled extract.py not found at {bundled_extract_py}")
 
-    # Patch static resources (i18n, themes) to use APPLIO_BASE_PATH
-    frameworks_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks")
-    static_patcher_path = "patches/patch_static_resources.py"
-    if os.path.exists(static_patcher_path):
-        print(f"  Patching: static resources to use APPLIO_BASE_PATH...")
-        static_result = subprocess.run(
-            [sys.executable, static_patcher_path, frameworks_path],
-            capture_output=True,
-            text=True
-        )
-        if static_result.stdout:
-            for line in static_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-        if static_result.returncode != 0:
-            print(f"    WARNING: patch_static_resources.py returned non-zero")
-    else:
-        print(f"  WARNING: Static resources patcher not found at {static_patcher_path}")
+    # Note: Static resources patcher disabled - using copy-based approach in macos_wrapper.py
+    # The copy-based approach (setup_bundled_resources) handles static resources at runtime
 
     return True
 
