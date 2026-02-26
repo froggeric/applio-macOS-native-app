@@ -28,7 +28,7 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
         Tuple of (patched_content, success)
     """
     # Pattern to find the subprocess.run call and return statement
-    old_pattern = r'(subprocess\.run\(command\))\n(    return f"Model \{model_name\} preprocessed successfully\.")'
+    old_pattern = r'subprocess\.run\(command\)\n(    return f"Model \{model_name\} preprocessed successfully\.")'
 
     # Check if already patched
     if "Validate preprocessing output" in content:
@@ -40,7 +40,9 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
         return content, True
 
     # Replacement code that checks return code and validates output
-    replacement = r'''\1
+    replacement = r'''result = subprocess.run(command)
+    if result.returncode != 0:
+        return f"Error: Preprocessing failed with code {result.returncode}"
 
     # Validate preprocessing output
     model_dir = os.path.join(logs_path, model_name)
@@ -65,7 +67,7 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
             f"Check that the dataset path '{dataset_path}' contains valid audio files."
         )
 
-\2'''
+\1'''
 
     new_content = re.sub(old_pattern, replacement, content)
     return new_content, True
@@ -82,7 +84,7 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
         Tuple of (patched_content, success)
     """
     # Pattern to find the subprocess.run call and return statement
-    old_pattern = r'(subprocess\.run\(command_1\))\n\n(    return f"Model \{model_name\} extracted successfully\.")'
+    old_pattern = r'subprocess\.run\(command_1\)\n\n(    return f"Model \{model_name\} extracted successfully\.")'
 
     # Check if already patched
     if "Validate extraction output" in content:
@@ -93,8 +95,10 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
         print("[patch_subprocess_validation] extract pattern not found - may already be patched")
         return content, True
 
-    # Replacement code that validates extracted directory
-    replacement = r'''\1
+    # Replacement code that checks return code and validates extracted directory
+    replacement = r'''result = subprocess.run(command_1)
+    if result.returncode != 0:
+        return f"Error: Feature extraction failed with code {result.returncode}"
 
     # Validate extraction output
     extracted_dir = os.path.join(model_path, "extracted")
@@ -112,7 +116,7 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
             f"Ensure preprocessing was completed successfully before running extraction."
         )
 
-\2'''
+\1'''
 
     new_content = re.sub(old_pattern, replacement, content)
     return new_content, True
