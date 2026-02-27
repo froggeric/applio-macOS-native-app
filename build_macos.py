@@ -538,7 +538,24 @@ def apply_patches():
         else:
             print(f"    WARNING: Data paths patcher not found at {data_paths_patcher}")
 
-        # Patch 1b: core.py - add subprocess validation for training pipeline
+        # Patch 1b: core.py - add pre-flight validation for dataset paths
+        print(f"  Patching pre-flight validation in core.py...")
+        preflight_patcher_path = "patches/patch_preflight_validation.py"
+        if os.path.exists(preflight_patcher_path):
+            pf_result = subprocess.run(
+                [sys.executable, preflight_patcher_path, os.path.dirname(bundled_core_py)],
+                capture_output=True,
+                text=True
+            )
+            for line in pf_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+            if pf_result.returncode != 0:
+                print(f"    WARNING: Pre-flight validation patcher returned {pf_result.returncode}")
+        else:
+            print(f"    SKIPPED: Pre-flight validation patcher not found")
+
+        # Patch 1c: core.py - add subprocess validation for training pipeline
         print(f"  Patching subprocess validation in core.py...")
         subprocess_patcher_path = "patches/patch_subprocess_validation.py"
         if os.path.exists(subprocess_patcher_path):
@@ -553,7 +570,24 @@ def apply_patches():
             if sv_result.returncode != 0:
                 print(f"    WARNING: Subprocess validation patcher returned {sv_result.returncode}")
         else:
-            print(f"    WARNING: Subprocess validation patcher not found at {subprocess_patcher_path}")
+            print(f"    SKIPPED: Subprocess validation patcher not found")
+
+        # Patch 1d: core.py - add empty dataset warning for preprocessing
+        print(f"  Patching preprocess warning in core.py...")
+        preprocess_patcher_path = "patches/patch_preprocess_warning.py"
+        if os.path.exists(preprocess_patcher_path):
+            pp_result = subprocess.run(
+                [sys.executable, preprocess_patcher_path, os.path.dirname(bundled_core_py)],
+                capture_output=True,
+                text=True
+            )
+            for line in pp_result.stdout.strip().split('\n'):
+                if line:
+                    print(f"    {line}")
+            if pp_result.returncode != 0:
+                print(f"    WARNING: Preprocess warning patcher returned {pp_result.returncode}")
+        else:
+            print(f"    SKIPPED: Preprocess warning patcher not found")
     else:
         print(f"  WARNING: Bundled core.py not found at {bundled_core_py}")
 
