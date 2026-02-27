@@ -84,11 +84,26 @@ datasets_path_relative = os.path.relpath(datasets_path, now_dir)
 
 
 def get_datasets_list():
-    return [
-        dirpath
-        for dirpath, _, filenames in os.walk(datasets_path_relative)
-        if any(filename.endswith(tuple(sup_audioext)) for filename in filenames)
-    ]
+    """Get list of datasets with audio files.
+
+    In frozen app (PyInstaller bundle), returns absolute paths to ensure
+    paths work correctly regardless of working directory.
+    """
+    import sys
+
+    is_frozen = getattr(sys, 'frozen', False)
+
+    datasets = []
+    for dirpath, _, filenames in os.walk(datasets_path_relative):
+        if any(filename.endswith(tuple(sup_audioext)) for filename in filenames):
+            if is_frozen:
+                # In frozen app, return absolute path
+                datasets.append(os.path.abspath(dirpath))
+            else:
+                # In source run, return relative path (existing behavior)
+                datasets.append(dirpath)
+
+    return datasets
 
 
 def refresh_datasets():
