@@ -248,6 +248,35 @@ if len(sys.argv) > 1:
             logging.info(f"Subprocess mode detected: script={script_path}")
             logging.info(f"Script arguments: {script_args}")
 
+            # === PATH VALIDATION FOR PREPROCESSING ===
+            # Detect preprocessing script by exact path match
+            if script_path.endswith('rvc/train/preprocess/preprocess.py') and len(script_args) >= 2:
+                dataset_path = script_args[1]
+                original_path = dataset_path
+
+                # First check: does path exist as-is?
+                if not os.path.exists(dataset_path):
+                    # Second check: try resolving relative path from BASE_PATH
+                    if not os.path.isabs(dataset_path):
+                        resolved = os.path.normpath(os.path.join(BASE_PATH, dataset_path))
+                        if os.path.exists(resolved):
+                            dataset_path = resolved
+                            script_args[1] = resolved
+                            logging.info(f"Dataset path resolved: {original_path} -> {resolved}")
+                        else:
+                            logging.error(f"Dataset path not found: {original_path} (also tried: {resolved})")
+                            print(f"Error: Dataset path does not exist: {original_path}")
+                            print(f"  Also tried resolving to: {resolved}")
+                            print(f"  Please use an absolute path to your dataset folder.")
+                            sys.exit(1)
+                    else:
+                        logging.error(f"Dataset path not found: {dataset_path}")
+                        print(f"Error: Dataset path does not exist: {dataset_path}")
+                        sys.exit(1)
+                else:
+                    logging.info(f"Dataset path validated: {dataset_path}")
+            # === END PATH VALIDATION ===
+
             # Adjust sys.argv for the script's perspective
             sys.argv = [script_path] + script_args
 
