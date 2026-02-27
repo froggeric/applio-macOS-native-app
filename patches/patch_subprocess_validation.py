@@ -55,23 +55,17 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
 \1model_info_path = os.path.join(model_dir, "model_info.json")
 
 \1if not os.path.exists(model_info_path):
-\1    raise RuntimeError(
-\1        f"Preprocessing failed: model_info.json not found at {model_info_path}. "
-\1        f"Check that the dataset path '{dataset_path}' contains valid audio files."
-\1    )
+\1    return f"Error: model_info.json not found at {model_info_path}. Check that the dataset path '{dataset_path}' contains valid audio files."
 
 \1try:
 \1    with open(model_info_path, "r", encoding="utf-8") as f:
 \1        model_info = json.load(f)
 \1except (json.JSONDecodeError, IOError) as e:
-\1    raise RuntimeError(f"Preprocessing failed: could not read model_info.json: {e}")
+\1    return f"Error: could not read model_info.json: {e}."
 
 \1total_seconds = model_info.get("total_seconds", 0)
 \1if total_seconds <= 0:
-\1    raise RuntimeError(
-\1        f"Preprocessing failed: no audio data was processed (total_seconds={total_seconds}). "
-\1        f"Check that the dataset path '{dataset_path}' contains valid audio files."
-\1    )
+\1    return f"Error: no audio data was processed (total_seconds={total_seconds}). Check that the dataset path '{dataset_path}' contains valid audio files (WAV, MP3, FLAC, OGG)."
 
 \1return f"Model {model_name} preprocessed successfully."'''
 
@@ -114,18 +108,12 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
 \1# Validate extracted files exist
 \1extracted_dir = os.path.join(model_path, "extracted")
 \1if not os.path.exists(extracted_dir):
-\1    raise RuntimeError(
-\1        f"Feature extraction failed: extracted directory not found at {extracted_dir}. "
-\1        f"Ensure preprocessing was completed successfully before running extraction."
-\1    )
+\1    return f"Error: extracted directory not found at {extracted_dir}. Run preprocessing first to generate audio data for extraction."
 
 \1# Check that extracted directory is not empty
 \1extracted_files = os.listdir(extracted_dir)
 \1if not extracted_files:
-\1    raise RuntimeError(
-\1        f"Feature extraction failed: extracted directory is empty at {extracted_dir}. "
-\1        f"Ensure preprocessing was completed successfully before running extraction."
-\1    )
+\1    return f"Error: extracted directory is empty at {extracted_dir}. Preprocessing may have failed - try re-running it."
 
 \1return f"Model {model_name} extracted successfully."'''
 
@@ -167,37 +155,25 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
 \2model_info_path = os.path.join(model_dir, "model_info.json")
 
 \2if not os.path.exists(model_info_path):
-\2    raise RuntimeError(
-\2        f"Training failed: preprocessing not found. "
-\2        f"Run preprocessing first for model '{model_name}'."
-\2    )
+\2    return f"Error: preprocessing not found. Run preprocessing first for model '{model_name}'."
 
 \2try:
 \2    with open(model_info_path, "r", encoding="utf-8") as f:
 \2        model_info = json.load(f)
 \2except (json.JSONDecodeError, IOError) as e:
-\2    raise RuntimeError(f"Training failed: could not read model_info.json: {e}")
+\2    return f"Error: could not read model_info.json: {e}."
 
 \2total_seconds = model_info.get("total_seconds", 0)
 \2if total_seconds <= 0:
-\2    raise RuntimeError(
-\2        f"Training failed: no audio data was preprocessed (total_seconds={total_seconds}). "
-\2        f"Re-run preprocessing with a valid dataset."
-\2    )
+\2    return f"Error: no audio data was preprocessed (total_seconds={total_seconds}). Re-run preprocessing with a valid dataset."
 
 \2extracted_dir = os.path.join(model_dir, "extracted")
 \2if not os.path.exists(extracted_dir):
-\2    raise RuntimeError(
-\2        f"Training failed: feature extraction not found. "
-\2        f"Run feature extraction first for model '{model_name}'."
-\2    )
+\2    return f"Error: feature extraction not found. Run feature extraction first for model '{model_name}'."
 
 \2extracted_files = os.listdir(extracted_dir)
 \2if not extracted_files:
-\2    raise RuntimeError(
-\2        f"Training failed: extracted directory is empty. "
-\2        f"Re-run feature extraction for model '{model_name}'."
-\2    )
+\2    return f"Error: extracted directory is empty. Re-run feature extraction for model '{model_name}'."
 
 \2'''
 
