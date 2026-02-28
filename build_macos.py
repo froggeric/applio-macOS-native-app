@@ -524,6 +524,7 @@ def pre_build_patch():
         ("patches/patch_subprocess_validation.py", "core.py", "core.py - subprocess validation", "dir"),
         ("patches/patch_preprocess_warning.py", "core.py", "core.py - preprocess warning", "dir"),
         ("patches/patch_train_paths.py", "rvc/train/train.py", "rvc/train/train.py - file-based path resolution", "dir"),
+        ("patches/patch_mute_paths.py", "rvc/train/extract/preparing_files.py", "preparing_files.py - mute file paths for frozen app", "dir"),
         # File-based patchers (pass full file path)
         ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
         ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
