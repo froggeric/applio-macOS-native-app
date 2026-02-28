@@ -186,6 +186,82 @@ class FinderHelper:
         NSWorkspace.sharedWorkspace().selectFile_inFileViewerRootedAtPath_(path, "")
 
 # =================================================================
+# 1.6. Early Data Path Setup (BEFORE subprocess mode detection)
+# =================================================================
+# CRITICAL: This must happen before subprocess mode detection so that
+# APPLIO_LOGS_PATH is available to subprocess scripts. When a subprocess
+# script is detected, it runs via runpy.run_path() BEFORE the GUI mode
+# setup (section 4) would normally set these environment variables.
+
+if getattr(sys, "frozen", False):
+    _early_prefs = PreferencesManager()
+    _early_data_path = _early_prefs.get_data_path() or os.path.expanduser("~/Applio")
+    # Debug: write to file since logging not set up yet
+    with open("/tmp/applio_debug.txt", "a") as f:
+        f.write(f"=== Early env setup ===\n")
+        f.write(f"_early_data_path={_early_data_path}\n")
+        f.write(f"APPLIO_LOGS_PATH={os.path.join(_early_data_path, 'logs')}\n")
+        f.write(f"PID={os.getpid()}\n")
+    os.environ["APPLIO_DATA_PATH"] = _early_data_path
+    os.environ["APPLIO_LOGS_PATH"] = os.path.join(_early_data_path, "logs")
+    # Also set these for subprocess scripts that may need them
+    os.environ["APPLIO_DATASETS_PATH"] = os.path.join(_early_data_path, "assets", "datasets")
+    os.environ["APPLIO_AUDIOS_PATH"] = os.path.join(_early_data_path, "assets", "audios")
+
+# =================================================================
+# 1.7. Write Runtime Configuration File (PROCESS-SAFE)
+# =================================================================
+# This file is the SOURCE OF TRUTH for path configuration.
+# All processes (main GUI, subprocesses, multiprocessing workers)
+# read from this file to get the correct paths.
+
+def _write_runtime_config():
+    """
+    Write runtime paths to configuration file.
+
+    This is PROCESS-SAFE: unlike environment variables, file-based
+    configuration works across all process boundaries on macOS.
+    """
+    import json
+
+    data_path = os.environ.get("APPLIO_DATA_PATH") or os.path.expanduser("~/Applio")
+
+    config = {
+        "version": 1,  # For future migration support
+        "data_path": data_path,
+        "logs_path": os.path.join(data_path, "logs"),
+        "datasets_path": os.path.join(data_path, "assets", "datasets"),
+        "audios_path": os.path.join(data_path, "assets", "audios"),
+        "timestamp": time.time() if 'time' in dir() else 0
+    }
+
+    # Write to multiple locations for redundancy
+    config_locations = [
+        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
+        os.path.expanduser("~/.applio/runtime_paths.json"),
+    ]
+
+    for config_path in config_locations:
+        try:
+            config_dir = os.path.dirname(config_path)
+            os.makedirs(config_dir, exist_ok=True)
+
+            # Write atomically: write to temp file, then rename
+            temp_path = config_path + ".tmp"
+            with open(temp_path, "w") as f:
+                json.dump(config, f, indent=2)
+            os.rename(temp_path, config_path)
+
+            # Use print since logging may not be set up yet
+            print(f"[runtime_config] Wrote config to: {config_path}")
+        except Exception as e:
+            print(f"[runtime_config] Failed to write config to {config_path}: {e}")
+
+# Write config in frozen mode (ensures it's available for all subprocesses)
+if getattr(sys, "frozen", False):
+    _write_runtime_config()
+
+# =================================================================
 # 2. Logging Configuration (BEFORE script execution)
 # =================================================================
 # CRITICAL: Logging must be set up before script execution mode detection
@@ -203,7 +279,7 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_file, mode='w'),
+            logging.FileHandler(log_file, mode='a'),
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -216,6 +292,8 @@ def setup_logging():
     logging.info(f"Version: 1.7.4 (Simplified Local)")
     logging.info(f"CWD: {os.getcwd()}")
     logging.info(f"Base Path: {BASE_PATH}")
+    logging.info(f"sys.frozen: {getattr(sys, 'frozen', False)}")
+    logging.info(f"sys._MEIPASS: {getattr(sys, '_MEIPASS', 'N/A')}")
 
 setup_logging()
 
@@ -256,19 +334,30 @@ if len(sys.argv) > 1:
 
                 # First check: does path exist as-is?
                 if not os.path.exists(dataset_path):
-                    # Second check: try resolving relative path from BASE_PATH
+                    # Second check: try resolving relative path from DATA_PATH (user's data location)
                     if not os.path.isabs(dataset_path):
-                        resolved = os.path.normpath(os.path.join(BASE_PATH, dataset_path))
-                        if os.path.exists(resolved):
-                            dataset_path = resolved
-                            script_args[1] = resolved
-                            logging.info(f"Dataset path resolved: {original_path} -> {resolved}")
+                        data_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
+                        resolved_from_data = os.path.normpath(os.path.join(data_path, dataset_path))
+                        if os.path.exists(resolved_from_data):
+                            dataset_path = resolved_from_data
+                            script_args[1] = resolved_from_data
+                            logging.info(f"Dataset path resolved from DATA_PATH: {original_path} -> {resolved_from_data}")
                         else:
-                            logging.error(f"Dataset path not found: {original_path} (also tried: {resolved})")
-                            print(f"Error: Dataset path does not exist: {original_path}")
-                            print(f"  Also tried resolving to: {resolved}")
-                            print(f"  Please use an absolute path to your dataset folder.")
-                            sys.exit(1)
+                            # Third check: try resolving relative path from BASE_PATH (app bundle)
+                            resolved_from_base = os.path.normpath(os.path.join(BASE_PATH, dataset_path))
+                            if os.path.exists(resolved_from_base):
+                                dataset_path = resolved_from_base
+                                script_args[1] = resolved_from_base
+                                logging.info(f"Dataset path resolved from BASE_PATH: {original_path} -> {resolved_from_base}")
+                            else:
+                                logging.error(f"Dataset path not found: {original_path}")
+                                logging.error(f"  Tried DATA_PATH: {resolved_from_data}")
+                                logging.error(f"  Tried BASE_PATH: {resolved_from_base}")
+                                print(f"Error: Dataset path does not exist: {original_path}")
+                                print(f"  Tried: {resolved_from_data}")
+                                print(f"  Tried: {resolved_from_base}")
+                                print(f"  Please use an absolute path to your dataset folder.")
+                                sys.exit(1)
                     else:
                         logging.error(f"Dataset path not found: {dataset_path}")
                         print(f"Error: Dataset path does not exist: {dataset_path}")
@@ -277,31 +366,50 @@ if len(sys.argv) > 1:
                     logging.info(f"Dataset path validated: {dataset_path}")
             # === END PATH VALIDATION ===
 
+            # Convert script_path to ABSOLUTE path BEFORE any CWD changes
+            # This is critical - the script lives in the app bundle (BASE_PATH),
+            # not in the user's data directory. If we change CWD first, the
+            # relative path will resolve incorrectly.
+            script_path_abs = os.path.abspath(script_path)
+
             # Adjust sys.argv for the script's perspective
-            sys.argv = [script_path] + script_args
+            sys.argv = [script_path_abs] + script_args
 
             # Add script's directory to sys.path for relative imports
             # This mimics the behavior of `python script.py` which adds the script's dir to sys.path
-            script_dir = os.path.dirname(os.path.abspath(script_path))
+            script_dir = os.path.dirname(script_path_abs)
             if script_dir not in sys.path:
                 sys.path.insert(0, script_dir)
 
+            # Change CWD to data path for correct path resolution in subprocess
+            # This ensures os.getcwd() returns DATA_PATH, not BASE_PATH
+            _data_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
+            _original_cwd = os.getcwd()
+            os.chdir(_data_path)
+            logging.info(f"Changed CWD for subprocess: {_data_path}")
+
+            # Ensure config file is written before running subprocess script
+            # This handles the case where subprocess starts before main GUI
+            _write_runtime_config()
+
             try:
-                runpy.run_path(script_path, run_name='__main__')
-                logging.info(f"Script completed successfully: {script_path}")
+                runpy.run_path(script_path_abs, run_name='__main__')
+                logging.info(f"Script completed successfully: {script_path_abs}")
                 sys.exit(0)
             except SystemExit as e:
                 # SystemExit is raised by sys.exit() in the script
                 # Non-zero exit codes indicate failure
                 if e.code != 0 and e.code is not None:
-                    logging.error(f"Script exited with code {e.code}: {script_path}")
+                    logging.error(f"Script exited with code {e.code}: {script_path_abs}")
                 else:
-                    logging.info(f"Script exited normally: {script_path}")
+                    logging.info(f"Script exited normally: {script_path_abs}")
                 sys.exit(e.code if e.code is not None else 0)
             except Exception as e:
-                logging.error(f"Script execution failed: {script_path}")
+                logging.error(f"Script execution failed: {script_path_abs}")
                 logging.exception(e)
                 sys.exit(1)
+            finally:
+                os.chdir(_original_cwd)  # Restore original CWD
 
 # =================================================================
 # 4. External Data Location Setup (GUI mode only)
@@ -346,6 +454,10 @@ create_data_structure(DATA_PATH)
 # This causes all relative paths (now_dir = os.getcwd()) to resolve here
 os.chdir(DATA_PATH)
 logging.info(f"Working directory changed to: {DATA_PATH}")
+
+# Set APPLIO_LOGS_PATH environment variable for core.py
+# This ensures logs_path is set correctly regardless of import timing
+os.environ["APPLIO_LOGS_PATH"] = os.path.join(DATA_PATH, "logs")
 
 # =================================================================
 # 5. GUI Mode Initialization
@@ -712,6 +824,7 @@ class ApplioApp:
     def start_backend(self):
         """Launches the actual Applio server."""
         try:
+            logging.info(f"CWD before app import: {os.getcwd()}")
             from app import launch_gradio
             logging.info("Initializing Gradio boot sequence...")
             launch_gradio(self.server_host, self.server_port)

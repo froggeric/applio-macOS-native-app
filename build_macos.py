@@ -22,7 +22,6 @@ Version format: {APPLIO_VERSION}.{BUILD_NUMBER}
 Example: 3.6.0.1 (Applio 3.6.0, build 1)
 """
 
-import PyInstaller.__main__
 import os
 import shutil
 import json
@@ -31,7 +30,53 @@ import argparse
 import subprocess
 import sys
 import time
+import atexit
 from pathlib import Path
+
+# =================================================================
+# SELF-PROTECTION: Backup this script to prevent accidental deletion
+# =================================================================
+# This script has been observed to be deleted during builds.
+# We backup and restore it to prevent data loss.
+_SCRIPT_PATH = os.path.abspath(__file__)
+_BACKUP_PATH = f"/tmp/{os.path.basename(_SCRIPT_PATH)}.backup"
+
+def _backup_script():
+    """Backup this script to /tmp."""
+    try:
+        shutil.copy2(_SCRIPT_PATH, _BACKUP_PATH)
+        with open(_BACKUP_PATH, "a") as f:
+            f.write(f"\n# Backup created at: {time.ctime()}\n")
+    except Exception as e:
+        print(f"WARNING: Failed to backup script: {e}")
+
+def _restore_script():
+    """Restore this script from /tmp backup if it was deleted."""
+    if not os.path.exists(_SCRIPT_PATH) and os.path.exists(_BACKUP_PATH):
+        print(f"\n{'='*60}")
+        print("WARNING: build_macos.py was deleted during build!")
+        print("Restoring from backup...")
+        print(f"{'='*60}\n")
+        try:
+            # Remove the timestamp comment
+            with open(_BACKUP_PATH, "r") as f:
+                content = f.read()
+            # Remove backup timestamp line
+            if "# Backup created at:" in content:
+                content = content[:content.rfind("\n# Backup created at:")]
+            with open(_SCRIPT_PATH, "w") as f:
+                f.write(content)
+            print(f"Restored: {_SCRIPT_PATH}")
+        except Exception as e:
+            print(f"ERROR: Failed to restore script: {e}")
+
+# Register restore handler for exit
+atexit.register(_restore_script)
+
+# Backup at startup
+_backup_script()
+
+import PyInstaller.__main__
 
 # =================================================================
 # Configuration
@@ -453,6 +498,99 @@ pyinstaller_args = [
 
 
 # =================================================================
+# Pre-build: Patch source files before PyInstaller bundles them
+# =================================================================
+def pre_build_patch():
+    """
+    Patch source files BEFORE PyInstaller bundles them.
+
+    CRITICAL: PyInstaller bundles modules into a PYZ archive. The frozen app
+    imports from this archive, NOT from filesystem files. Therefore, patching
+    files after build has NO effect.
+
+    We must patch source files before PyInstaller runs, then restore them
+    afterward to keep the repo clean.
+    """
+    print("\n" + "=" * 60)
+    print("PRE-BUILD: Patching source files")
+    print("=" * 60)
+
+    # Patches to apply: (patcher_path, source_file, description, patcher_type)
+    # patcher_type: "dir" = pass directory to patcher, "file" = pass full file path
+    patches_to_apply = [
+        # Directory-based patchers (pass dirname)
+        ("patches/patch_data_paths.py", "core.py", "core.py - file-based path resolution", "dir"),
+        ("patches/patch_preflight_validation.py", "core.py", "core.py - pre-flight dataset validation", "dir"),
+        ("patches/patch_subprocess_validation.py", "core.py", "core.py - subprocess validation", "dir"),
+        ("patches/patch_preprocess_warning.py", "core.py", "core.py - preprocess warning", "dir"),
+        ("patches/patch_train_paths.py", "rvc/train/train.py", "rvc/train/train.py - file-based path resolution", "dir"),
+        # File-based patchers (pass full file path)
+        ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
+        ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
+    ]
+
+    patched_files = {}  # Maps source_file -> original content
+
+    for patcher_path, source_file, description, patcher_type in patches_to_apply:
+        if not os.path.exists(patcher_path):
+            print(f"  SKIPPED: {description} (patcher not found)")
+            continue
+
+        if not os.path.exists(source_file):
+            print(f"  SKIPPED: {description} (source file not found)")
+            continue
+
+        # Read and store original content ONLY if not already stored
+        # (handles multiple patchers modifying the same file)
+        if source_file not in patched_files:
+            with open(source_file, "r", encoding="utf-8") as f:
+                patched_files[source_file] = f.read()
+
+        # Determine the argument based on patcher type
+        if patcher_type == "dir":
+            patcher_arg = os.path.dirname(source_file) or "."
+        else:  # "file"
+            patcher_arg = source_file
+
+        # Run the patcher
+        print(f"  Patching: {description}")
+        result = subprocess.run(
+            [sys.executable, patcher_path, patcher_arg],
+            capture_output=True,
+            text=True
+        )
+
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                print(f"    {line}")
+
+        if result.returncode not in [0, 1]:  # 0 = patched, 1 = already patched
+            print(f"    WARNING: Patcher returned {result.returncode}")
+
+    return patched_files
+
+
+def post_build_restore(patched_files):
+    """
+    Restore source files to original state after build.
+    """
+    if not patched_files:
+        return
+
+    print("\n" + "=" * 60)
+    print("POST-BUILD: Restoring source files")
+    print("=" * 60)
+
+    for source_file, original_content in patched_files.items():
+        try:
+            with open(source_file, "w", encoding="utf-8") as f:
+                f.write(original_content)
+            print(f"  Restored: {source_file}")
+        except Exception as e:
+            print(f"  WARNING: Failed to restore {source_file}: {e}")
+
+
+# =================================================================
 # Run PyInstaller
 # =================================================================
 print("=" * 60)
@@ -461,8 +599,14 @@ print(f"Mode: LITE (user data stored externally)")
 print("=" * 60)
 print()
 
-print("Starting PyInstaller build...")
+# PATCH SOURCE FILES BEFORE BUILD
+patched_files = pre_build_patch()
+
+print("\nStarting PyInstaller build...")
 PyInstaller.__main__.run(pyinstaller_args)
+
+# RESTORE SOURCE FILES AFTER BUILD
+post_build_restore(patched_files)
 
 
 # =================================================================
@@ -513,144 +657,40 @@ clean_bundled_models()
 
 
 # =================================================================
-# Apply patches to bundled files
+# Post-build cleanup
 # =================================================================
-def apply_patches():
-    """Apply fork-specific patches to bundled files without modifying upstream source."""
-    print("\nApplying fork patches to bundled files...")
+def post_build_cleanup():
+    """Clean up after build.
 
-    # Patch 1: core.py - redirect logs_path to use now_dir instead of __file__
-    bundled_core_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "core.py")
-    if os.path.exists(bundled_core_py):
-        print(f"  Patching: {bundled_core_py}")
-        data_paths_patcher = "patches/patch_data_paths.py"
-        if os.path.exists(data_paths_patcher):
-            dp_result = subprocess.run(
-                [sys.executable, data_paths_patcher, os.path.dirname(bundled_core_py)],
-                capture_output=True,
-                text=True
-            )
-            for line in dp_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-            if dp_result.returncode != 0:
-                print(f"    WARNING: Data paths patcher returned {dp_result.returncode}")
-        else:
-            print(f"    WARNING: Data paths patcher not found at {data_paths_patcher}")
+    NOTE: All patches are now applied PRE-BUILD (see pre_build_patch function).
+    PyInstaller bundles modules into a PYZ archive, so patching .py files
+    after build has NO effect - the frozen app imports from the archive.
+    """
+    print("\nPost-build cleanup...")
 
-        # Patch 1b: core.py - add pre-flight validation for dataset paths
-        print(f"  Patching pre-flight validation in core.py...")
-        preflight_patcher_path = "patches/patch_preflight_validation.py"
-        if os.path.exists(preflight_patcher_path):
-            pf_result = subprocess.run(
-                [sys.executable, preflight_patcher_path, os.path.dirname(bundled_core_py)],
-                capture_output=True,
-                text=True
-            )
-            for line in pf_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-            if pf_result.returncode != 0:
-                print(f"    WARNING: Pre-flight validation patcher returned {pf_result.returncode}")
-        else:
-            print(f"    SKIPPED: Pre-flight validation patcher not found")
+    # Clean up __pycache__ directories
+    print("  Cleaning up __pycache__ directories...")
+    frameworks_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks")
+    resources_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Resources")
 
-        # Patch 1c: core.py - add subprocess validation for training pipeline
-        print(f"  Patching subprocess validation in core.py...")
-        subprocess_patcher_path = "patches/patch_subprocess_validation.py"
-        if os.path.exists(subprocess_patcher_path):
-            sv_result = subprocess.run(
-                [sys.executable, subprocess_patcher_path, os.path.dirname(bundled_core_py)],
-                capture_output=True,
-                text=True
-            )
-            for line in sv_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-            if sv_result.returncode != 0:
-                print(f"    WARNING: Subprocess validation patcher returned {sv_result.returncode}")
-        else:
-            print(f"    SKIPPED: Subprocess validation patcher not found")
-
-        # Patch 1d: core.py - add empty dataset warning for preprocessing
-        print(f"  Patching preprocess warning in core.py...")
-        preprocess_patcher_path = "patches/patch_preprocess_warning.py"
-        if os.path.exists(preprocess_patcher_path):
-            pp_result = subprocess.run(
-                [sys.executable, preprocess_patcher_path, os.path.dirname(bundled_core_py)],
-                capture_output=True,
-                text=True
-            )
-            for line in pp_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-            if pp_result.returncode != 0:
-                print(f"    WARNING: Preprocess warning patcher returned {pp_result.returncode}")
-        else:
-            print(f"    SKIPPED: Preprocess warning patcher not found")
-    else:
-        print(f"  WARNING: Bundled core.py not found at {bundled_core_py}")
-
-    # Patch 2: train.py - add 44100 Hz sample rate option
-    bundled_train_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "tabs", "train", "train.py")
-
-    if not os.path.exists(bundled_train_py):
-        print(f"  WARNING: Bundled train.py not found at {bundled_train_py}")
-        return False
-
-    print(f"  Patching: {bundled_train_py}")
-
-    patcher_path = "patches/patch_train_44100.py"
-    if not os.path.exists(patcher_path):
-        print(f"WARNING: Patcher not found at {patcher_path}")
-        return False
-
-    result = subprocess.run(
-        [sys.executable, patcher_path, bundled_train_py],
-        capture_output=True,
-        text=True
-    )
-
-    if result.returncode != 0:
-        print(f"WARNING: Patcher failed with exit code {result.returncode}")
-        print(result.stdout)
-        print(result.stderr)
-        return False
-
-    # Print patcher output
-    for line in result.stdout.strip().split('\n'):
-        if line:
-            print(f"  {line}")
-
-    # Patch extract.py for multiprocessing safety
-    bundled_extract_py = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Frameworks", "rvc", "train", "extract", "extract.py")
-
-    if os.path.exists(bundled_extract_py):
-        print(f"  Patching: {bundled_extract_py}")
-        mp_patcher_path = "patches/patch_multiprocessing.py"
-        if os.path.exists(mp_patcher_path):
-            mp_result = subprocess.run(
-                [sys.executable, mp_patcher_path, bundled_extract_py],
-                capture_output=True,
-                text=True
-            )
-            for line in mp_result.stdout.strip().split('\n'):
-                if line:
-                    print(f"    {line}")
-            if mp_result.returncode not in [0, 1]:  # 0 = patched, 1 = already patched
-                print(f"    WARNING: Multiprocessing patcher failed with exit code {mp_result.returncode}")
-        else:
-            print(f"    WARNING: Multiprocessing patcher not found at {mp_patcher_path}")
-    else:
-        print(f"  WARNING: Bundled extract.py not found at {bundled_extract_py}")
-
-    # Note: Static resources patcher disabled - using copy-based approach in macos_wrapper.py
-    # The copy-based approach (setup_bundled_resources) handles static resources at runtime
+    for base_path in [frameworks_path, resources_path]:
+        if os.path.exists(base_path):
+            pycache_count = 0
+            for root, dirs, files in os.walk(base_path):
+                if "__pycache__" in dirs:
+                    pycache_dir = os.path.join(root, "__pycache__")
+                    try:
+                        shutil.rmtree(pycache_dir)
+                        pycache_count += 1
+                    except Exception as e:
+                        print(f"    WARNING: Failed to remove {pycache_dir}: {e}")
+            if pycache_count > 0:
+                print(f"    Removed {pycache_count} __pycache__ directories from {os.path.basename(base_path)}")
 
     return True
 
 
-apply_patches()
+post_build_cleanup()
 
 
 # =================================================================
