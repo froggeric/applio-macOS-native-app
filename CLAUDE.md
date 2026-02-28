@@ -27,7 +27,7 @@ python app.py --port 8080     # Custom port
 
 # macOS Native App
 python macos_wrapper.py       # Run with native window
-python build_macos.py         # Build .app bundle → dist/Applio.app
+venv_macos/bin/python build_macos.py  # Build .app bundle → dist/Applio.app (requires venv_macos)
 
 # Build options (combine as needed):
 python build_macos.py --dmg           # Create DMG installer after build
@@ -139,9 +139,19 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - Required because scripts (in app bundle) won't exist in DATA_PATH (user data location)
 - Scripts found at `os.path.join(BASE_PATH, script_relative_path)` when not in cwd
 
+**Subprocess Environment Variables:**
+- macOS uses "spawn" not "fork" - subprocesses DON'T inherit parent's env vars
+- `macos_wrapper.py` must set `APPLIO_DATA_PATH`, `APPLIO_LOGS_PATH` BEFORE `runpy.run_path()`
+- See `DEBUGGING_HISTORY.md` for full investigation of this issue
+
 **Build outputs:**
 - `build/` - PyInstaller intermediate files
 - `dist/` - Final `Applio.app` bundle
+
+**Debugging Frozen Apps:**
+- Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
+- Check `DEBUGGING_HISTORY.md` for documented debugging sessions and solutions
+- When stuck after 3+ fix attempts: STOP and question the architecture (per systematic-debugging skill)
 
 **Build process gotchas:**
 - PyInstaller cleans `dist/` at start - never delete while builds running
