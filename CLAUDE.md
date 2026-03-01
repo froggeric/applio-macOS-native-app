@@ -103,6 +103,13 @@ git merge upstream/main
 
 No merge conflicts expected since macOS files don't overlap with upstream.
 
+**Safe-to-modify files** (macOS-only, not in upstream):
+- `assets/entitlements.plist`, `scripts/entitlements_dev_id.plist`
+- `patches/`, `macos_wrapper.py`, `build_macos.py`, `Applio.spec`
+- `install_applio_mac.sh`, `requirements_macos.txt`, `CLAUDE.md`
+
+**Verify file origin:** `git ls-tree upstream/main --name-only | grep <path>`
+
 ## Platform Notes
 
 **Python Version Requirements:**
