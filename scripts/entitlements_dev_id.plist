@@ -24,9 +24,7 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
-    <!-- AVFoundation/Microphone access -->
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
+    <!-- Note: audio-input removed - not needed for wrapper, Gradio handles audio in browser -->
 
     <!-- User folder selection (data location picker) -->
     <key>com.apple.security.files.user-selected.read-write</key>
