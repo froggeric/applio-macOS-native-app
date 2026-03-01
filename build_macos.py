@@ -82,7 +82,7 @@ import PyInstaller.__main__
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-BUILD_NUMBER = 2  # Increment for each build
+BUILD_NUMBER = 3  # Increment for each build
 
 # Read version from assets/config.json
 def get_applio_version():
@@ -521,6 +521,7 @@ def pre_build_patch():
         # Directory-based patchers (pass dirname)
         ("patches/patch_data_paths.py", "core.py", "core.py - file-based path resolution", "dir"),
         ("patches/patch_preflight_validation.py", "core.py", "core.py - pre-flight dataset validation", "dir"),
+        ("patches/patch_process_tracking.py", "core.py", "core.py - process tracking for subprocesses", "dir"),
         ("patches/patch_subprocess_validation.py", "core.py", "core.py - subprocess validation", "dir"),
         ("patches/patch_preprocess_warning.py", "core.py", "core.py - preprocess warning", "dir"),
         ("patches/patch_custom_pretrained_paths.py", "core.py", "core.py - custom pretrained path resolution", "dir"),
@@ -528,6 +529,7 @@ def pre_build_patch():
         ("patches/patch_mute_paths.py", "rvc/train/extract/preparing_files.py", "preparing_files.py - mute file paths for frozen app", "dir"),
         ("patches/patch_pretrained_selector.py", "rvc/lib/tools/pretrained_selector.py", "pretrained_selector.py - BASE_PATH resolution", "dir"),
         # File-based patchers (pass full file path)
+        ("patches/patch_loading_html.py", "assets/loading.html", "assets/loading.html - dynamic version in footer", "file"),
         ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
         ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
     ]

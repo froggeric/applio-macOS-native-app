@@ -48,3 +48,4 @@ pywebview>=5.0
 pyinstaller>=6.3.0
 pyobjc-framework-AVFoundation
 pyobjc-framework-Cocoa
+psutil>=5.9.0

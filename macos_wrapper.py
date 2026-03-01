@@ -24,6 +24,10 @@ multiprocessing.freeze_support()
 import os
 import sys
 import runpy
+import signal
+import datetime
+import json
+import logging
 
 # macOS native APIs for preferences and dialogs
 # These are conditional imports - only needed for GUI mode
@@ -58,6 +62,195 @@ if getattr(sys, "frozen", False):
     os.chdir(BASE_PATH)
 else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+# =================================================================
+# 1.4. Version Configuration
+# =================================================================
+# Version format: {APPLIO_VERSION}.{BUILD_NUMBER}
+# Must match build_macos.py VERSION
+
+VERSION = "3.6.0.2"
+GITHUB_REPO = "froggeric/applio-macOS-native-app"
+RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
+API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+
+# =================================================================
+# 1.6. Process Tracking for Background Operations
+# =================================================================
+
+PROCESS_STATE_FILE = None  # Set after DATA_PATH is known
+
+def _get_process_state_path():
+    """Get path to active_processes.json (lazy initialization)."""
+    global PROCESS_STATE_FILE
+    if PROCESS_STATE_FILE is None:
+        data_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
+        PROCESS_STATE_FILE = os.path.join(data_path, ".applio", "active_processes.json")
+    return PROCESS_STATE_FILE
+
+def _ensure_process_state_dir():
+    """Ensure the .applio directory exists."""
+    state_path = _get_process_state_path()
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+
+def read_active_processes() -> dict:
+    """Read the active processes state file."""
+    state_path = _get_process_state_path()
+    if not os.path.exists(state_path):
+        return {"version": 1, "processes": {}}
+    try:
+        with open(state_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {"version": 1, "processes": {}}
+
+def write_active_processes(state: dict):
+    """Write the active processes state file."""
+    _ensure_process_state_dir()
+    state_path = _get_process_state_path()
+    # Atomic write
+    temp_path = state_path + ".tmp"
+    with open(temp_path, "w") as f:
+        json.dump(state, f, indent=2)
+    os.rename(temp_path, state_path)
+
+def write_process(process_type: str, pid: int, **metadata):
+    """Register a process in active_processes.json."""
+    state = read_active_processes()
+    state["processes"][process_type] = {
+        "pid": pid,
+        "started_at": datetime.datetime.now().isoformat(),
+        "status": "running",
+        **metadata
+    }
+    write_active_processes(state)
+    logging.info(f"[ProcessTracker] Registered {process_type} with PID {pid}")
+
+def clear_process(process_type: str):
+    """Remove a process from active_processes.json."""
+    state = read_active_processes()
+    if process_type in state["processes"]:
+        old_pid = state["processes"][process_type].get("pid")
+        state["processes"][process_type] = None
+        write_active_processes(state)
+        logging.info(f"[ProcessTracker] Cleared {process_type} (was PID {old_pid})")
+
+def update_process_status(process_type: str, status: str):
+    """Update status of a tracked process."""
+    state = read_active_processes()
+    if process_type in state["processes"] and state["processes"][process_type]:
+        state["processes"][process_type]["status"] = status
+        write_active_processes(state)
+        logging.info(f"[ProcessTracker] {process_type} status: {status}")
+
+def has_active_processes() -> bool:
+    """Check if any processes are currently active."""
+    state = read_active_processes()
+    for ptype, info in state.get("processes", {}).items():
+        if info and info.get("pid"):
+            # Verify process still exists
+            try:
+                import psutil
+                if psutil.pid_exists(info["pid"]):
+                    return True
+            except ImportError:
+                # Fallback: try sending signal 0 (no-op)
+                try:
+                    os.kill(info["pid"], 0)
+                    return True
+                except (ProcessLookupError, OSError):
+                    pass
+    return False
+
+def get_active_process_list() -> list:
+    """Get list of active processes with their info."""
+    state = read_active_processes()
+    active = []
+    for ptype, info in state.get("processes", {}).items():
+        if info and info.get("pid"):
+            try:
+                import psutil
+                if psutil.pid_exists(info["pid"]):
+                    active.append({"type": ptype, **info})
+            except (ImportError, ProcessLookupError):
+                pass
+    return active
+
+class ProcessController:
+    """Control tracked processes via POSIX signals."""
+
+    @staticmethod
+    def pause(pid: int) -> bool:
+        """Pause a process (SIGSTOP)."""
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            logging.info(f"[ProcessController] Paused PID {pid}")
+            return True
+        except (ProcessLookupError, PermissionError) as e:
+            logging.warning(f"[ProcessController] Failed to pause PID {pid}: {e}")
+            return False
+
+    @staticmethod
+    def resume(pid: int) -> bool:
+        """Resume a paused process (SIGCONT)."""
+        try:
+            os.kill(pid, signal.SIGCONT)
+            logging.info(f"[ProcessController] Resumed PID {pid}")
+            return True
+        except (ProcessLookupError, PermissionError) as e:
+            logging.warning(f"[ProcessController] Failed to resume PID {pid}: {e}")
+            return False
+
+    @staticmethod
+    def terminate(pid: int, force: bool = False) -> bool:
+        """Terminate a process (SIGTERM or SIGKILL)."""
+        try:
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            os.kill(pid, sig)
+            logging.info(f"[ProcessController] Terminated PID {pid} with {sig}")
+            return True
+        except (ProcessLookupError, PermissionError) as e:
+            logging.warning(f"[ProcessController] Failed to terminate PID {pid}: {e}")
+            return False
+
+    @staticmethod
+    def terminate_all() -> int:
+        """Terminate all tracked processes. Returns count terminated."""
+        count = 0
+        state = read_active_processes()
+        for ptype, info in state.get("processes", {}).items():
+            if info and info.get("pid"):
+                if ProcessController.terminate(info["pid"]):
+                    count += 1
+                clear_process(ptype)
+        logging.info(f"[ProcessController] Terminated {count} processes")
+        return count
+
+    @staticmethod
+    def pause_all() -> int:
+        """Pause all running processes. Returns count paused."""
+        count = 0
+        state = read_active_processes()
+        for ptype, info in state.get("processes", {}).items():
+            if info and info.get("pid") and info.get("status") == "running":
+                if ProcessController.pause(info["pid"]):
+                    update_process_status(ptype, "paused")
+                    count += 1
+        return count
+
+    @staticmethod
+    def resume_all() -> int:
+        """Resume all paused processes. Returns count resumed."""
+        count = 0
+        state = read_active_processes()
+        for ptype, info in state.get("processes", {}).items():
+            if info and info.get("pid") and info.get("status") == "paused":
+                if ProcessController.resume(info["pid"]):
+                    update_process_status(ptype, "running")
+                    count += 1
+        return count
+
 
 # =================================================================
 # 1.5. Preferences Manager for External Data Location
@@ -184,6 +377,174 @@ class FinderHelper:
 
         # Open in Finder
         NSWorkspace.sharedWorkspace().selectFile_inFileViewerRootedAtPath_(path, "")
+
+
+def check_for_updates():
+    """
+    Check for updates by querying the GitHub API.
+
+    Compares the current VERSION with the latest release tag_name.
+    Shows a webview dialog with the result:
+    - Up to date: confirmation message
+    - Update available: link to releases page
+    - Error: graceful error message with link to releases
+    """
+    import logging
+
+    latest_version = None
+    release_url = RELEASES_URL
+    error_message = None
+
+    try:
+        # Create request with User-Agent header (GitHub API requires this)
+        request = urllib.request.Request(
+            API_URL,
+            headers={"User-Agent": f"Applio/{VERSION}"}
+        )
+
+        # Make the request with timeout
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+            # Get tag_name and strip 'v' prefix if present
+            tag_name = data.get("tag_name", "")
+            latest_version = tag_name.lstrip("v")
+
+            # Get release URL (prefer html_url, fallback to releases page)
+            release_url = data.get("html_url", RELEASES_URL)
+
+            logging.info(f"Update check: current={VERSION}, latest={latest_version}")
+
+    except urllib.error.HTTPError as e:
+        error_message = f"HTTP {e.code}: {e.reason}"
+        logging.warning(f"Update check failed (HTTP): {error_message}")
+    except urllib.error.URLError as e:
+        error_message = f"Network error: {e.reason}"
+        logging.warning(f"Update check failed (network): {error_message}")
+    except json.JSONDecodeError as e:
+        error_message = "Invalid response from server"
+        logging.warning(f"Update check failed (JSON): {e}")
+    except Exception as e:
+        error_message = str(e)
+        logging.warning(f"Update check failed: {error_message}")
+
+    # Build HTML response
+    if error_message:
+        # Error case
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    padding: 20px;
+                    text-align: center;
+                    background: #1a1a2e;
+                    color: #eee;
+                }}
+                h2 {{ color: #ff6b6b; }}
+                p {{ margin: 15px 0; }}
+                a {{
+                    color: #4ecdc4;
+                    text-decoration: none;
+                }}
+                a:hover {{ text-decoration: underline; }}
+                .error {{ color: #888; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <h2>Could Not Check for Updates</h2>
+            <p>An error occurred while checking for updates.</p>
+            <p><a href="{release_url}" onclick="window.open(this.href); return false;">View Releases on GitHub</a></p>
+            <p class="error">Error: {error_message}</p>
+        </body>
+        </html>
+        """
+    elif latest_version and latest_version != VERSION:
+        # Update available
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    padding: 20px;
+                    text-align: center;
+                    background: #1a1a2e;
+                    color: #eee;
+                }}
+                h2 {{ color: #4ecdc4; }}
+                p {{ margin: 15px 0; }}
+                .current {{ color: #888; }}
+                .latest {{ color: #4ecdc4; font-weight: bold; }}
+                a {{
+                    display: inline-block;
+                    margin-top: 20px;
+                    padding: 10px 20px;
+                    background: #4ecdc4;
+                    color: #1a1a2e;
+                    text-decoration: none;
+                    border-radius: 5px;
+                    font-weight: bold;
+                }}
+                a:hover {{ background: #45b7aa; }}
+            </style>
+        </head>
+        <body>
+            <h2>Update Available</h2>
+            <p><span class="current">Current version: v{VERSION}</span></p>
+            <p><span class="latest">Latest version: v{latest_version}</span></p>
+            <p><a href="{release_url}" onclick="window.open(this.href); return false;">Download Update</a></p>
+        </body>
+        </html>
+        """
+    else:
+        # Up to date
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    padding: 20px;
+                    text-align: center;
+                    background: #1a1a2e;
+                    color: #eee;
+                }}
+                h2 {{ color: #4ecdc4; }}
+                p {{ margin: 15px 0; }}
+                .version {{ color: #4ecdc4; font-weight: bold; }}
+            </style>
+        </head>
+        <body>
+            <h2>You're Up to Date</h2>
+            <p>Applio is running the latest version.</p>
+            <p class="version">v{VERSION}</p>
+        </body>
+        </html>
+        """
+
+    # Show in a webview dialog
+    update_window = webview.create_window(
+        "Check for Updates",
+        html=html_content,
+        width=400,
+        height=280,
+        resizable=False,
+        min_size=(400, 280),
+        maximizable=False,
+        fullscreenable=False
+    )
+
+
+# =================================================================
+# 1.6. Early Data Path Setup (BEFORE subprocess mode detection)
 
 # =================================================================
 # 1.6. Early Data Path Setup (BEFORE subprocess mode detection)
@@ -469,6 +830,9 @@ import socket
 import http.server
 import socketserver
 import webview
+import urllib.request
+import urllib.error
+import json
 
 # =================================================================
 # 1.5. Copy bundled static resources to user's data location
@@ -559,6 +923,45 @@ setup_bundled_resources()
 # 2. UI Support & Native Menu
 # =================================================================
 
+# Global reference to about window (to prevent garbage collection)
+_about_window = None
+
+def show_about_dialog():
+    """Display the About Applio dialog in a webview window."""
+    global _about_window
+
+    # Read the about HTML template
+    about_html_path = os.path.join(BASE_PATH, "assets", "about.html")
+    try:
+        with open(about_html_path, 'r', encoding='utf-8') as f:
+            about_html = f.read()
+    except Exception as e:
+        logging.error(f"Failed to load about.html: {e}")
+        return
+
+    # Create API class for JavaScript callbacks
+    class AboutApi:
+        def open_repo_link(self):
+            """Open the GitHub repository in the default browser."""
+            import subprocess
+            subprocess.Popen(['open', RELEASES_URL])
+
+        def check_for_updates(self):
+            """Check for updates from the About dialog."""
+            check_for_updates()
+
+    # Create the about window
+    _about_window = webview.create_window(
+        "About Applio",
+        html=about_html,
+        width=400,
+        height=300,
+        resizable=False,
+        min_size=(400, 300),
+        max_size=(400, 300),
+        js_api=AboutApi()
+    )
+
 def get_native_menu():
     from webview.menu import Menu, MenuAction, MenuSeparator
     def open_in_finder(subpath: str):
@@ -588,7 +991,8 @@ def get_native_menu():
             ]),
         ]),
         Menu("Applio", [
-            MenuAction("About Applio", lambda: logging.info("About clicked")),
+            MenuAction("About Applio", show_about_dialog),
+            MenuAction("Check for Updates...", check_for_updates),
             MenuSeparator(),
             MenuAction("Services", lambda: None),
             MenuSeparator(),
