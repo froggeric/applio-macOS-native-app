@@ -163,6 +163,25 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - PyInstaller cache corruption: clear `~/Library/Application Support/pyinstaller/`
 - Notarization fails for PyInstaller apps - users run `xattr -cr Applio.app`
 
+**Pywebview gotchas:**
+- Windows created with `webview.create_window()` MUST be assigned to a global variable (e.g., `_about_window`, `_update_window`) to prevent garbage collection
+- Menu callbacks need lambda wrappers: `MenuAction("About", lambda: show_about_dialog())` not `MenuAction("About", show_about_dialog)`
+
+**Patch idempotency pattern:**
+- Each patch function must check for its OWN specific marker (e.g., `if '_track_process("training"' in content`)
+- DO NOT use a shared `IDEMPOTENCY_MARKER` check that returns early - this prevents actual patches from being applied
+
+**Version management:**
+- `macos_wrapper.py` reads VERSION dynamically from `assets/config.json` + BUILD_NUMBER
+- `build_macos.py` uses same source - both must stay in sync
+- `patch_loading_html.py` reads from `assets/config.json` for loading screen version
+
+**Background process tracking:**
+- State file: `~/.applio/active_processes.json` (single source of truth)
+- Process types: training, preprocess, extract, inference, tts
+- POSIX signals: SIGSTOP (pause), SIGCONT (resume), SIGTERM (terminate)
+- Patch order: `patch_process_tracking.py` MUST run before `patch_subprocess_validation.py`
+
 **GitHub releases:**
 - Repo name for releases: `froggeric/applio-macOS-native-app`
 - `gh release create` needs `workflow` scope; use `gh api` as fallback
