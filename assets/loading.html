@@ -163,6 +163,14 @@
             font-size: 10px;
             color: var(--detail-text);
             letter-spacing: 0.5px;
+            left: 0;
+            right: 0;
+            text-align: center;
+        }
+
+        #version-line,
+        #copyright-line {
+            display: inline-block;
         }
     </style>
 </head>
@@ -187,7 +195,10 @@
         </div>
     </div>
 
-    <div class="footer">ENGINE v3.6.0 | METAL ACCELERATED</div>
+    <div class="footer">
+        <span id="version-line">Applio v3.6.2.3 | METAL ACCELERATED</span><br>
+        <span id="copyright-line">© 2026 Frédéric Guigand</span>
+    </div>
 
     <script>
         const progressBar = document.getElementById('progress-bar');
