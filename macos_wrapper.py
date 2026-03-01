@@ -36,6 +36,7 @@ import urllib.error
 try:
     from Foundation import NSUserDefaults, NSURL
     from AppKit import NSOpenPanel, NSWorkspace, NSModalResponseOK
+    from PyObjCTools import AppHelper
     NATIVE_APIS_AVAILABLE = True
 except ImportError:
     NATIVE_APIS_AVAILABLE = False
@@ -1252,24 +1253,52 @@ def show_about_dialog():
 # issues with lambda serialization in pywebview's menu system.
 
 def _menu_callback_about():
-    """Menu callback for About Applio."""
+    """Menu callback for About Applio.
+
+    CRITICAL: This runs in a background thread (pywebview menu handler).
+    We must use AppHelper.callAfter() to schedule UI work on the main thread.
+    """
     logging.info("[About Menu] _menu_callback_about() called")
-    try:
-        show_about_dialog()
-        logging.info("[About Menu] _menu_callback_about() completed successfully")
-    except Exception as e:
-        logging.error(f"[About Menu] _menu_callback_about() failed: {e}")
-        logging.exception(e)
+
+    def _show_on_main_thread():
+        """Execute show_about_dialog() on the main thread."""
+        try:
+            show_about_dialog()
+            logging.info("[About Menu] _menu_callback_about() completed successfully")
+        except Exception as e:
+            logging.error(f"[About Menu] _menu_callback_about() failed: {e}")
+            logging.exception(e)
+
+    # Schedule on main thread using AppHelper
+    if NATIVE_APIS_AVAILABLE:
+        AppHelper.callAfter(_show_on_main_thread)
+    else:
+        # Fallback for non-macOS platforms
+        _show_on_main_thread()
 
 def _menu_callback_check_updates():
-    """Menu callback for Check for Updates."""
+    """Menu callback for Check for Updates.
+
+    CRITICAL: This runs in a background thread (pywebview menu handler).
+    We must use AppHelper.callAfter() to schedule UI work on the main thread.
+    """
     logging.info("[Update Menu] _menu_callback_check_updates() called")
-    try:
-        check_for_updates()
-        logging.info("[Update Menu] _menu_callback_check_updates() completed successfully")
-    except Exception as e:
-        logging.error(f"[Update Menu] _menu_callback_check_updates() failed: {e}")
-        logging.exception(e)
+
+    def _check_on_main_thread():
+        """Execute check_for_updates() on the main thread."""
+        try:
+            check_for_updates()
+            logging.info("[Update Menu] _menu_callback_check_updates() completed successfully")
+        except Exception as e:
+            logging.error(f"[Update Menu] _menu_callback_check_updates() failed: {e}")
+            logging.exception(e)
+
+    # Schedule on main thread using AppHelper
+    if NATIVE_APIS_AVAILABLE:
+        AppHelper.callAfter(_check_on_main_thread)
+    else:
+        # Fallback for non-macOS platforms
+        _check_on_main_thread()
 
 def get_native_menu():
     from webview.menu import Menu, MenuAction, MenuSeparator
