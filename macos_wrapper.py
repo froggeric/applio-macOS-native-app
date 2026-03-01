@@ -1140,6 +1140,9 @@ def show_about_dialog():
         logging.error(f"Failed to load about.html: {e}")
         return
 
+    # Replace version placeholder with actual version
+    about_html = about_html.replace("{{APPLIO_VERSION}}", f"v{VERSION}")
+
     # Create API class for JavaScript callbacks
     class AboutApi:
         def open_repo_link(self):
