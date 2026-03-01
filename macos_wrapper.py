@@ -606,6 +606,13 @@ def show_progress_window():
     # Create and show native progress window
     _progress_window_controller = ProgressWindowController(process_type, process_info)
     _progress_window_controller.show()
+    logging.info("[ProgressWindow] Window shown, starting Cocoa event loop")
+
+    # CRITICAL: Start Cocoa event loop to keep the window alive.
+    # This blocks until the window is closed (which calls os._exit(0)).
+    # Without this, the function returns and the app exits immediately.
+    from PyObjCTools import AppHelper
+    AppHelper.runConsoleEventLoop(installInterrupt=True)
 
 
 def on_window_closing():
