@@ -333,8 +333,8 @@ def show_close_confirmation_dialog():
 def on_window_closing():
     """Handle main window closing event.
 
-    CRITICAL: pywebview doesn't reliably honor return values to prevent closing.
-    We use a global flag and immediate dialog show to handle this.
+    CRITICAL: pywebview's closing event honors return False to prevent closing.
+    The Event.set() method returns True if any handler returns False.
     """
     global _shutting_down, _close_confirmation_window
 
@@ -342,7 +342,6 @@ def on_window_closing():
     if _shutting_down:
         logging.info("[Window] Already shutting down, ignoring duplicate close event")
         return
-    _shutting_down = True
 
     # CRITICAL: Add logging immediately to verify this is called
     logging.info("[Window] on_window_closing() CALLED")
@@ -375,9 +374,10 @@ def on_window_closing():
         # The dialog will handle the actual exit decision
         show_close_confirmation_dialog()
 
-        # Don't call os._exit() here - let the dialog handle it
-        # Return None (no return value) since pywebview doesn't honor False
-        return
+        # CRITICAL: Return False to prevent window from closing
+        # pywebview's Event.set() returns True if any handler returns False
+        logging.info("[Window] Returning False to prevent close")
+        return False
     else:
         logging.info("[Window] No active processes, exiting cleanly")
         os._exit(0)
