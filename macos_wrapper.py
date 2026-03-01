@@ -253,6 +253,85 @@ class ProcessController:
 
 
 # =================================================================
+# 1.7. Close Confirmation Dialog for Active Processes
+# =================================================================
+
+# Global references to prevent garbage collection
+_close_confirmation_window = None
+_progress_window = None
+_main_window_ref = None
+
+class CloseConfirmationApi:
+    """API for close confirmation dialog."""
+
+    def terminate_and_quit(self):
+        """Terminate all processes and quit."""
+        logging.info("[CloseDialog] User chose to terminate and quit")
+        ProcessController.terminate_all()
+        os._exit(0)
+
+    def keep_running(self):
+        """Keep processes running, show progress window."""
+        logging.info("[CloseDialog] User chose to keep running")
+        global _close_confirmation_window
+        if _close_confirmation_window:
+            _close_confirmation_window.destroy()
+        show_progress_window()
+
+def show_close_confirmation_dialog():
+    """Show the close confirmation dialog."""
+    global _close_confirmation_window
+
+    # Get active processes
+    processes = get_active_process_list()
+
+    # Read the HTML template
+    html_path = os.path.join(BASE_PATH, "assets", "close_confirmation.html")
+    try:
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+    except Exception as e:
+        logging.error(f"Failed to load close_confirmation.html: {e}")
+        # Fallback: just terminate
+        os._exit(0)
+        return
+
+    # Inject processes JSON
+    import json
+    html_content = html_content.replace("{{PROCESSES_JSON}}", json.dumps(processes))
+
+    _close_confirmation_window = webview.create_window(
+        "Active Processes",
+        html=html_content,
+        width=450,
+        height=350,
+        resizable=False,
+        minimizable=False,
+        maximizable=False,
+        fullscreenable=False,
+        js_api=CloseConfirmationApi()
+    )
+
+def on_window_closing():
+    """Handle main window closing event."""
+    if has_active_processes():
+        logging.info("[Window] Active processes detected, showing confirmation")
+        show_close_confirmation_dialog()
+        return False  # Prevent close, dialog will handle exit
+    else:
+        logging.info("[Window] No active processes, exiting")
+        os._exit(0)
+        # Note: os._exit(0) never returns, so no unreachable code after it
+
+def show_progress_window():
+    """Show progress monitoring window for background processes."""
+    global _progress_window
+    # Placeholder - Task 4 will implement this
+    logging.info("[ProgressWindow] Showing progress window (placeholder)")
+    os._exit(0)
+
+
+# =================================================================
 # 1.5. Preferences Manager for External Data Location
 # =================================================================
 
@@ -1270,8 +1349,10 @@ class ApplioApp:
             vibrancy=True
         )
         
-        self.window.events.closed += lambda: os._exit(0)
-        
+        self.window.events.closing += on_window_closing
+        global _main_window_ref
+        _main_window_ref = self.window
+
         logging.info("Starting Webview GUI...")
         webview.start(menu=get_native_menu(), debug=False)
 
