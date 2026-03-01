@@ -71,7 +71,7 @@ assets/
 |---------|------|
 | macOS installer | `install_applio_mac.sh` |
 | 44.1kHz patch | `patches/patch_train_44100.py` |
-| Code signing config | `assets/entitlements.plist` |
+| Code signing config | `assets/entitlements.plist`, `scripts/entitlements_dev_id.plist` |
 | Fork differences | `FORK_DIFFERENCES.md` |
 | Main entry point | `app.py` |
 | Core function exports | `core.py` |
@@ -156,6 +156,8 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - When stuck after 3+ fix attempts: STOP and question the architecture (per systematic-debugging skill)
 
 **Build process gotchas:**
+- Two entitlements files must stay in sync: `assets/entitlements.plist` (full) and `scripts/entitlements_dev_id.plist` (minimal for Developer ID)
+- No microphone entitlement needed - pywebview wrapper doesn't capture audio; Gradio handles it via browser
 - Patches in `patches/` are applied to source files before PyInstaller, then source files are restored to pristine state
 - PyInstaller cleans `dist/` at start - never delete while builds running
 - Build size: ~850MB (~2GB downloads on first launch)
