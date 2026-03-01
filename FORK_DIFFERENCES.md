@@ -23,7 +23,7 @@ This fork maintains a **minimal delta** from upstream - only macOS native app ad
 
 | File | Purpose |
 |------|---------|
-| `macos_wrapper.py` | Native macOS app wrapper using PyWebView with loading screen, permissions management, external data location support |
+| `macos_wrapper.py` | Native macOS app wrapper using PyWebView with native dialogs (NSAlert/NSWindow), external data location, process tracking |
 | `build_macos.py` | PyInstaller build script for creating `Applio.app` bundle with DMG/PKG options |
 | `requirements_macos.txt` | macOS-specific dependencies (pywebview, pyinstaller, pyobjc) |
 | `README_MACOS.md` | Build instructions, troubleshooting, and usage documentation |
@@ -95,15 +95,22 @@ On first launch, users select where to store all Applio data (models, datasets, 
    - `PYTORCH_ENABLE_METAL_ACCELERATOR=1` - Metal acceleration
    - Cache redirection to `~/Library/Application Support/Applio/`
 
-3. **Permissions Management:**
-   - `PermissionsManager` class for microphone TCC permissions
-   - Uses AVFoundation for native permission requests
+3. **Native macOS Dialogs:**
+   - About dialog: Native NSPanel with version info, GitHub link, update check
+   - Check for Updates: Native NSAlert with version comparison
+   - Close confirmation: Native NSAlert when closing with active processes
+   - Progress monitor: Native NSWindow with pause/resume/terminate controls
 
-4. **Loading Screen:**
+4. **Process Tracking:**
+   - Background training/inference process monitoring
+   - State file: `~/.applio/active_processes.json`
+   - POSIX signals: SIGSTOP (pause), SIGCONT (resume), SIGTERM (terminate)
+
+5. **Loading Screen:**
    - Serves `assets/loading.html` during backend startup
    - 600-second timeout for first-time model downloads
 
-5. **Subprocess Support:**
+6. **Subprocess Support:**
    - Training scripts run from app bundle (not user data location)
    - Script path resolution with fallback to BASE_PATH
 

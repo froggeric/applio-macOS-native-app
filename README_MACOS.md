@@ -359,6 +359,7 @@ This fork maintains minimal delta from upstream by patching at build time:
 | Pretrained merging | `build_macos.py` | Merges upstream `pretrains.json` + `assets/pretrains_macos_additions.json` |
 | App bundling | `build_macos.py` | PyInstaller build with signing, DMG, notarization |
 | Native wrapper | `macos_wrapper.py` | PyWebview native macOS window with external data location support |
+| Native dialogs | `macos_wrapper.py` | All dialogs use native macOS NSAlert/NSWindow (About, Updates, Progress) |
 | Static resources | `macos_wrapper.py` | Copies configs and tts_voices.json to user data at startup |
 
 **No upstream source files are modified** - all changes happen during the build process or at runtime startup.
@@ -368,7 +369,7 @@ This fork maintains minimal delta from upstream by patching at build time:
 | File | Purpose |
 |------|---------|
 | `build_macos.py` | Main build script (app, DMG, models installer) |
-| `macos_wrapper.py` | Native window wrapper with external data location |
+| `macos_wrapper.py` | Native window wrapper with external data location, native dialogs |
 | `models_installer.py` | Standalone models installer (shares preferences with main app) |
 | `install_applio_mac.sh` | Standalone installation script |
 | `Applio.spec` | PyInstaller config (generated, gitignored) |
