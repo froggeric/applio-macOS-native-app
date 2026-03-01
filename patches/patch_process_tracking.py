@@ -82,7 +82,8 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
 
     Line 448: subprocess.run(command)
     """
-    if IDEMPOTENCY_MARKER in content:
+    # Specific idempotency check: has this specific patch been applied?
+    if '_track_process("preprocess"' in content:
         return content, True  # Already patched
 
     # Pattern: subprocess.run(command) followed by return statement
@@ -111,7 +112,8 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
 
     Line 485: subprocess.run(command_1)
     """
-    if IDEMPOTENCY_MARKER in content:
+    # Specific idempotency check: has this specific patch been applied?
+    if '_track_process("extract"' in content:
         return content, True
 
     # Pattern: subprocess.run(command_1) followed by blank line and return
@@ -141,7 +143,8 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
 
     Line 553: subprocess.run(command)
     """
-    if IDEMPOTENCY_MARKER in content:
+    # Specific idempotency check: has this specific patch been applied?
+    if '_track_process("training"' in content:
         return content, True
 
     # Pattern: subprocess.run(command) followed by run_index_script call
@@ -171,7 +174,10 @@ def patch_run_index_script(content: str) -> tuple[str, bool]:
 
     Line 568: subprocess.run(command)
     """
-    if IDEMPOTENCY_MARKER in content:
+    # Specific idempotency check: has this specific patch been applied?
+    # Note: index script doesn't track processes (short-running, optional)
+    # We check for the patched error handling pattern instead
+    if 'Error: Index generation failed with code' in content:
         return content, True
 
     # Pattern: subprocess.run(command) followed by return
@@ -198,7 +204,8 @@ def patch_voice_conversion(content: str) -> tuple[str, bool]:
 
     Line 368: subprocess.run(command_tts)
     """
-    if IDEMPOTENCY_MARKER in content:
+    # Specific idempotency check: has this specific patch been applied?
+    if '_track_process("tts"' in content:
         return content, True
 
     # This one is trickier - it runs TTS then does inference
