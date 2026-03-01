@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+    Entitlements for Applio Developer ID Distribution
+
+    These entitlements are required for PyInstaller-bundled Python/PyTorch apps.
+    DO NOT enable app-sandbox for Developer ID distribution - it will break
+    filesystem access for user-selected data directories.
+
+    For Mac App Store distribution, a different entitlements file will be needed.
+    -->
+
+    <!-- CRITICAL: PyTorch/Python JIT compilation -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- CRITICAL: PyInstaller loads dynamic libraries at runtime -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- CRITICAL: Mixed signing states in PyInstaller bundles -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- AVFoundation/Microphone access -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- User folder selection (data location picker) -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Network access (HuggingFace downloads, model fetching) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

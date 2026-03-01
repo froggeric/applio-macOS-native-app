@@ -1,0 +1,23 @@
+{
+  "planPath": "docs/plans/2026-03-01-background-process-handling-impl.md",
+  "designPath": "docs/plans/2026-03-01-background-process-handling-design.md",
+  "reviewStatus": "REVIEWED_AND_CORRECTED",
+  "issuesFound": 15,
+  "issuesFixed": [
+    "Patch application order - must run BEFORE patch_subprocess_validation.py",
+    "Wrong patcher type - changed 'python' to 'dir'",
+    "Frozen app relaunch - use 'open' command instead of sys.executable",
+    "Unreachable code in on_window_closing - removed redundant return",
+    "psutil requirement - added explicit note to verify and add",
+    "Added Critical Integration Notes section",
+    "Added Testing Checklist"
+  ],
+  "tasks": [
+    {"id": 1, "subject": "Task 1: Create Process Tracking Helper Module", "status": "pending", "nativeTaskId": "14"},
+    {"id": 2, "subject": "Task 2: Create patch_process_tracking.py", "status": "pending", "nativeTaskId": "15"},
+    {"id": 3, "subject": "Task 3: Create Close Confirmation Dialog", "status": "pending", "blockedBy": [1], "nativeTaskId": "16"},
+    {"id": 4, "subject": "Task 4: Create Progress Monitoring Window", "status": "pending", "blockedBy": [1, 3], "nativeTaskId": "17"},
+    {"id": 5, "subject": "Task 5: Integration and Testing", "status": "pending", "blockedBy": [1, 2, 3, 4], "nativeTaskId": "18"}
+  ],
+  "lastUpdated": "2026-03-01T15:30:00Z"
+}
