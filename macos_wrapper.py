@@ -331,8 +331,7 @@ class ProgressWindowController:
         from AppKit import (
             NSWindow, NSButton, NSTextField, NSProgressIndicator,
             NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
-            NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
-            NSFontBoldSystemFont, NSFontSystemFontOfSize, NSColor
+            NSBackingStoreBuffered, NSCenterTextAlignment, NSFont
         )
 
         self.process_type = process_type
