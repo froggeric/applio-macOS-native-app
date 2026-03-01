@@ -323,12 +323,134 @@ def on_window_closing():
         os._exit(0)
         # Note: os._exit(0) never returns, so no unreachable code after it
 
+class ProgressMonitorApi:
+    """API for progress monitoring window."""
+
+    def __init__(self, process_type):
+        self.process_type = process_type
+
+    def get_initial_state(self):
+        """Get current process state."""
+        state = read_active_processes()
+        info = state.get("processes", {}).get(self.process_type, {})
+        return {
+            "processType": self.process_type.capitalize(),
+            "progress": 0,  # Would need log parsing
+            "eta": "--",
+            "details": info.get("model_name", "Running..."),
+            "elapsed": self._get_elapsed(info.get("started_at"))
+        }
+
+    def _get_elapsed(self, started_at):
+        if not started_at:
+            return "--"
+        try:
+            start = datetime.datetime.fromisoformat(started_at)
+            elapsed = datetime.datetime.now() - start
+            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except:
+            return "--"
+
+    def terminate(self):
+        """Terminate the process."""
+        state = read_active_processes()
+        info = state.get("processes", {}).get(self.process_type)
+        if info and info.get("pid"):
+            ProcessController.terminate(info["pid"])
+            clear_process(self.process_type)
+        os._exit(0)
+
+    def pause(self):
+        """Pause the process."""
+        state = read_active_processes()
+        info = state.get("processes", {}).get(self.process_type)
+        if info and info.get("pid"):
+            ProcessController.pause(info["pid"])
+            update_process_status(self.process_type, "paused")
+
+    def resume(self):
+        """Resume the process."""
+        state = read_active_processes()
+        info = state.get("processes", {}).get(self.process_type)
+        if info and info.get("pid"):
+            ProcessController.resume(info["pid"])
+            update_process_status(self.process_type, "running")
+
+    def relaunch(self):
+        """Relaunch the full app."""
+        import subprocess
+        if getattr(sys, 'frozen', False):
+            # Frozen app: use 'open' command to launch the .app bundle
+            app_path = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+            subprocess.Popen(['open', app_path])
+        else:
+            # Development: just run the script
+            subprocess.Popen([sys.executable, os.path.join(BASE_PATH, 'macos_wrapper.py')])
+        # Don't exit - let user close progress window
+
+    def resize_window(self, width, height):
+        """Resize the window."""
+        global _progress_window
+        if _progress_window:
+            _progress_window.resize(width, height)
+
+
 def show_progress_window():
-    """Show progress monitoring window for background processes."""
-    global _progress_window
-    # Placeholder - Task 4 will implement this
-    logging.info("[ProgressWindow] Showing progress window (placeholder)")
-    os._exit(0)
+    """Show the progress monitoring window."""
+    global _progress_window, _main_window_ref
+
+    # Determine which process to monitor
+    processes = get_active_process_list()
+    if not processes:
+        logging.warning("[ProgressWindow] No active processes to monitor")
+        os._exit(0)
+        return
+
+    # Prioritize training, then extract, then preprocess
+    priority = ["training", "extract", "preprocess", "tts", "inference"]
+    process_type = None
+    for ptype in priority:
+        for p in processes:
+            if p["type"] == ptype:
+                process_type = ptype
+                break
+        if process_type:
+            break
+
+    if not process_type:
+        process_type = processes[0]["type"]
+
+    # Close main window if still open
+    if _main_window_ref:
+        try:
+            _main_window_ref.destroy()
+        except:
+            pass
+
+    # Read HTML template
+    html_path = os.path.join(BASE_PATH, "assets", "progress_monitor.html")
+    try:
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+    except Exception as e:
+        logging.error(f"Failed to load progress_monitor.html: {e}")
+        os._exit(0)
+        return
+
+    _progress_window = webview.create_window(
+        "Applio Process Monitor",
+        html=html_content,
+        width=480,
+        height=280,
+        resizable=True,
+        min_size=(400, 250),
+        js_api=ProgressMonitorApi(process_type)
+    )
+
+    # When progress window closes, just exit
+    _progress_window.events.closed += lambda: os._exit(0)
 
 
 # =================================================================
