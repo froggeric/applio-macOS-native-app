@@ -74,11 +74,6 @@ GITHUB_REPO = "froggeric/applio-macOS-native-app"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
-# Import webview and urllib early - needed by check_for_updates()
-import webview
-import urllib.request
-import urllib.error
-
 # =================================================================
 # 1.6. Process Tracking for Background Operations
 # =================================================================
@@ -264,6 +259,7 @@ class ProcessController:
 _close_confirmation_window = None
 _progress_window = None
 _main_window_ref = None
+_update_window = None
 
 class CloseConfirmationApi:
     """API for close confirmation dialog."""
@@ -594,6 +590,7 @@ def check_for_updates():
     - Update available: link to releases page
     - Error: graceful error message with link to releases
     """
+    global _update_window
     import logging
 
     latest_version = None
@@ -736,7 +733,7 @@ def check_for_updates():
         """
 
     # Show in a webview dialog
-    update_window = webview.create_window(
+    _update_window = webview.create_window(
         "Check for Updates",
         html=html_content,
         width=400,
@@ -1034,6 +1031,10 @@ import threading
 import socket
 import http.server
 import socketserver
+import webview
+import urllib.request
+import urllib.error
+import json
 
 # =================================================================
 # 1.5. Copy bundled static resources to user's data location

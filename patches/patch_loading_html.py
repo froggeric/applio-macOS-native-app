@@ -86,9 +86,56 @@ def get_version_from_build_script() -> str:
     return "3.6.0.3"
 
 
+def patch_footer_styles(file_path: str) -> bool:
+    """
+    Add copyright styling to the footer in loading.html.
+
+    Ensures the copyright text matches the version text styling and both are centered.
+
+    Args:
+        file_path: Path to assets/loading.html
+
+    Returns:
+        True if patching succeeded, False otherwise
+    """
+    if not os.path.exists(file_path):
+        print(f"[patch_loading_html] Error: {file_path} not found")
+        return False
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Check if copyright styles already exist
+    if "#copyright-line" in content:
+        print("[patch_loading_html] Copyright styles already present")
+        return True
+
+    # Add copyright line styles after the .footer CSS block
+    # Pattern finds the end of .footer CSS block (closing brace)
+    footer_style_pattern = r'(\.footer\s*{[^}]*letter-spacing:\s*[^;]+;[^}]*})'
+
+    new_style = r'\1\n\n        #version-line,\n        #copyright-line {\n            display: block;\n            text-align: center;\n        }'
+
+    if re.search(footer_style_pattern, content):
+        new_content = re.sub(footer_style_pattern, new_style, content)
+
+        if new_content != content:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            print("[patch_loading_html] Added copyright styles")
+            return True
+        else:
+            print("[patch_loading_html] No changes needed for styles")
+            return True
+    else:
+        print("[patch_loading_html] Warning: Could not find footer style block")
+        return False
+
+
 def patch_loading_html(file_path: str) -> bool:
     """
-    Patch assets/loading.html to replace placeholder version with actual version.
+    Patch assets/loading.html to replace placeholder version with actual version
+    and add copyright styling.
 
     Args:
         file_path: Path to assets/loading.html
@@ -136,7 +183,7 @@ def patch_loading_html(file_path: str) -> bool:
                 legacy_pattern,
                 rf'''<div class="footer">
         <span id="version-line">Applio v{version} | METAL ACCELERATED</span><br>
-        <span style="font-size: 8px; opacity: 0.7;">© 2026 Frédéric Guigand</span>
+        <span id="copyright-line">© 2026 Frédéric Guigand</span>
     </div>''',
                 content
             )
@@ -152,7 +199,7 @@ def patch_loading_html(file_path: str) -> bool:
 
 def patch_all(base_path: str) -> bool:
     """
-    Apply loading.html patch.
+    Apply loading.html patch (version and footer styles).
 
     Args:
         base_path: Path to the assets directory or project root
@@ -168,7 +215,13 @@ def patch_all(base_path: str) -> bool:
 
     print(f"[patch_loading_html] Patching {file_path}")
 
-    return patch_loading_html(file_path)
+    # Apply footer styles patch first
+    styles_ok = patch_footer_styles(file_path)
+
+    # Then apply version patch
+    version_ok = patch_loading_html(file_path)
+
+    return styles_ok and version_ok
 
 
 if __name__ == "__main__":
