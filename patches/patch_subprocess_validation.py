@@ -175,9 +175,10 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
 \2if not extracted_files:
 \2    return f"Error: extracted directory is empty. Re-run feature extraction for model '{model_name}'."
 
-\2'''
+'''
 
     # Insert validation code between pg, pd assignment and train_script_path
+    # Note: validation_code ends with just a newline, so we add \2 (indentation) before train_script_path
     replacement = r'\1' + validation_code + r'\2train_script_path = os.path.join'
 
     new_content = re.sub(insert_pattern, replacement, content)
