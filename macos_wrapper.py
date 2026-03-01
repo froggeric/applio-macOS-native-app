@@ -268,67 +268,346 @@ class ProcessController:
 
 
 # =================================================================
-# 1.7. Close Confirmation Dialog for Active Processes
+# 1.7. Close Confirmation Dialog for Active Processes (Native macOS)
 # =================================================================
 
 # Global references to prevent garbage collection
-_close_confirmation_window = None
-_progress_window = None
 _main_window_ref = None
 _update_window = None
-_window_close_prevented = False  # Flag to track if close was prevented
 _shutting_down = False  # Global flag to prevent multiple shutdown attempts
+_progress_window_controller = None  # Native progress window controller
 
-class CloseConfirmationApi:
-    """API for close confirmation dialog."""
-
-    def terminate_and_quit(self):
-        """Terminate all processes and quit."""
-        logging.info("[CloseDialog] User chose to terminate and quit")
-        ProcessController.terminate_all()
-        os._exit(0)
-
-    def keep_running(self):
-        """Keep processes running, show progress window."""
-        logging.info("[CloseDialog] User chose to keep running")
-        global _close_confirmation_window
-        if _close_confirmation_window:
-            _close_confirmation_window.destroy()
-        show_progress_window()
 
 def show_close_confirmation_dialog():
-    """Show the close confirmation dialog."""
-    global _close_confirmation_window
-
-    # Get active processes
-    processes = get_active_process_list()
-
-    # Read the HTML template
-    html_path = os.path.join(BASE_PATH, "assets", "close_confirmation.html")
-    try:
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-    except Exception as e:
-        logging.error(f"Failed to load close_confirmation.html: {e}")
-        # Fallback: just terminate
+    """Show native macOS confirmation dialog for active processes."""
+    if not NATIVE_APIS_AVAILABLE:
+        logging.warning("[CloseDialog] Native APIs not available, exiting")
         os._exit(0)
         return
 
-    # Inject processes JSON
-    import json
-    html_content = html_content.replace("{{PROCESSES_JSON}}", json.dumps(processes))
+    from AppKit import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
 
-    _close_confirmation_window = webview.create_window(
-        "Active Processes",
-        html=html_content,
-        width=450,
-        height=350,
-        resizable=False,
-        minimizable=False,
-        maximizable=False,
-        fullscreenable=False,
-        js_api=CloseConfirmationApi()
+    # Get active processes for display
+    processes = get_active_process_list()
+
+    # Build process info text
+    process_lines = []
+    for p in processes:
+        ptype = p.get("type", "unknown").capitalize()
+        model = p.get("model_name") or p.get("details", "Running")
+        process_lines.append(f"• {ptype}: {model}")
+
+    process_info = "\n".join(process_lines) if process_lines else "Unknown processes"
+
+    # Create native alert
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Active Processes Running")
+    alert.setInformativeText_(
+        f"The following processes are still running:\n\n{process_info}\n\n"
+        "What would you like to do?"
     )
+    alert.addButtonWithTitle_("Terminate & Quit")
+    alert.addButtonWithTitle_("Keep Running in Background")
+    alert.setAlertStyle_(2)  # NSAlertStyleWarning
+
+    logging.info("[CloseDialog] Showing native NSAlert")
+    response = alert.runModal()
+    logging.info(f"[CloseDialog] User response: {response}")
+
+    if response == NSAlertFirstButtonReturn:
+        # Terminate & Quit
+        logging.info("[CloseDialog] User chose to terminate and quit")
+        ProcessController.terminate_all()
+        os._exit(0)
+    else:
+        # Keep Running in Background
+        logging.info("[CloseDialog] User chose to keep running")
+        show_progress_window()
+
+
+class ProgressWindowController:
+    """Native macOS progress monitoring window."""
+
+    def __init__(self, process_type, process_info):
+        from AppKit import (
+            NSWindow, NSButton, NSTextField, NSProgressIndicator,
+            NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
+            NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
+            NSFontBoldSystemFont, NSFontSystemFontOfSize, NSColor
+        )
+
+        self.process_type = process_type
+        self.process_info = process_info
+        self.paused = False
+        self.start_time = datetime.datetime.now()
+        self.timer = None
+
+        # Create window (400x300)
+        style = NSTitledWindowMask | NSClosableWindowMask
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, 400, 300),
+            style,
+            NSBackingStoreBuffered,
+            False
+        )
+        self.window.setTitle_(f"Applio - {process_type.capitalize()}")
+        self.window.center()
+        self.window.setDelegate_(self)
+
+        # Build UI elements
+        y = 260  # Start from top
+        label_height = 20
+        button_height = 28
+        padding = 12
+
+        # Process type label (bold)
+        self.type_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - label_height, 368, label_height)
+        )
+        self.type_label.setStringValue_(f"{process_type.capitalize()} Process")
+        self.type_label.setBezeled_(False)
+        self.type_label.setDrawsBackground_(False)
+        self.type_label.setEditable_(False)
+        self.type_label.setSelectable_(False)
+        self.type_label.setAlignment_(NSCenterTextAlignment)
+        bold_font = NSFont.boldSystemFontOfSize_(16)
+        self.type_label.setFont_(bold_font)
+        self.window.contentView().addSubview_(self.type_label)
+
+        y -= label_height + padding
+
+        # Details label (model name or other info)
+        details = process_info.get("model_name") or process_info.get("details", "Running...")
+        self.details_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - label_height, 368, label_height)
+        )
+        self.details_label.setStringValue_(details)
+        self.details_label.setBezeled_(False)
+        self.details_label.setDrawsBackground_(False)
+        self.details_label.setEditable_(False)
+        self.details_label.setSelectable_(False)
+        self.details_label.setAlignment_(NSCenterTextAlignment)
+        self.window.contentView().addSubview_(self.details_label)
+
+        y -= label_height + padding
+
+        # Elapsed time label
+        self.time_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - label_height, 368, label_height)
+        )
+        self.time_label.setStringValue_("Elapsed: 00:00:00")
+        self.time_label.setBezeled_(False)
+        self.time_label.setDrawsBackground_(False)
+        self.time_label.setEditable_(False)
+        self.time_label.setSelectable_(False)
+        self.time_label.setAlignment_(NSCenterTextAlignment)
+        self.window.contentView().addSubview_(self.time_label)
+
+        y -= label_height + padding
+
+        # Status label
+        self.status_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - label_height, 368, label_height)
+        )
+        self.status_label.setStringValue_("Status: Running")
+        self.status_label.setBezeled_(False)
+        self.status_label.setDrawsBackground_(False)
+        self.status_label.setEditable_(False)
+        self.status_label.setSelectable_(False)
+        self.status_label.setAlignment_(NSCenterTextAlignment)
+        self.window.contentView().addSubview_(self.status_label)
+
+        y -= label_height + padding
+
+        # Progress indicator (indeterminate)
+        self.progress = NSProgressIndicator.alloc().initWithFrame_(
+            NSMakeRect(100, y - 20, 200, 20)
+        )
+        self.progress.setIndeterminate_(True)
+        self.progress.startAnimation_(None)
+        self.window.contentView().addSubview_(self.progress)
+
+        y -= 30 + padding
+
+        # Buttons row
+        button_width = 115
+        button_spacing = 10
+        total_buttons_width = (button_width * 3) + (button_spacing * 2)
+        start_x = (400 - total_buttons_width) / 2
+
+        # Terminate button
+        self.terminate_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x, y - button_height, button_width, button_height)
+        )
+        self.terminate_btn.setTitle_("Terminate")
+        self.terminate_btn.setBezelStyle_(1)  # Rounded
+        self.terminate_btn.setAction_("terminate:")
+        self.terminate_btn.setTarget_(self)
+        self.window.contentView().addSubview_(self.terminate_btn)
+
+        # Pause/Resume button
+        self.pause_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x + button_width + button_spacing, y - button_height, button_width, button_height)
+        )
+        self.pause_btn.setTitle_("Pause")
+        self.pause_btn.setBezelStyle_(1)  # Rounded
+        self.pause_btn.setAction_("togglePause:")
+        self.pause_btn.setTarget_(self)
+        self.window.contentView().addSubview_(self.pause_btn)
+
+        # Relaunch button
+        self.relaunch_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x + (button_width + button_spacing) * 2, y - button_height, button_width, button_height)
+        )
+        self.relaunch_btn.setTitle_("Relaunch App")
+        self.relaunch_btn.setBezelStyle_(1)  # Rounded
+        self.relaunch_btn.setAction_("relaunch:")
+        self.relaunch_btn.setTarget_(self)
+        self.window.contentView().addSubview_(self.relaunch_btn)
+
+        # Start elapsed time updater
+        self._start_timer()
+
+    def _start_timer(self):
+        """Start timer to update elapsed time."""
+        from Foundation import NSTimer
+        # Use started_at from process info if available
+        started_at = self.process_info.get("started_at")
+        if started_at:
+            try:
+                self.start_time = datetime.datetime.fromisoformat(started_at)
+            except:
+                pass
+
+        # Create a recurring timer
+        self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0,  # 1 second interval
+            self,
+            "updateElapsedTime:",
+            None,
+            True
+        )
+
+    def updateElapsedTime_(self, sender):
+        """Update the elapsed time label."""
+        elapsed = datetime.datetime.now() - self.start_time
+        hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.time_label.setStringValue_(f"Elapsed: {hours:02d}:{minutes:02d}:{seconds:02d}")
+
+        # Update status based on process state
+        state = read_active_processes()
+        info = state.get("processes", {}).get(self.process_type)
+        if info:
+            status = info.get("status", "running")
+            self.status_label.setStringValue_(f"Status: {status.capitalize()}")
+
+    def terminate_(self, sender):
+        """Terminate the process and exit."""
+        logging.info(f"[ProgressWindow] Terminating {self.process_type}")
+        pid = self.process_info.get("pid")
+        if pid:
+            ProcessController.terminate(pid)
+            clear_process(self.process_type)
+        self._cleanup()
+        os._exit(0)
+
+    def togglePause_(self, sender):
+        """Toggle pause/resume for the process."""
+        pid = self.process_info.get("pid")
+        if not pid:
+            return
+
+        if self.paused:
+            logging.info(f"[ProgressWindow] Resuming {self.process_type}")
+            ProcessController.resume(pid)
+            update_process_status(self.process_type, "running")
+            sender.setTitle_("Pause")
+            self.progress.startAnimation_(None)
+            self.paused = False
+        else:
+            logging.info(f"[ProgressWindow] Pausing {self.process_type}")
+            ProcessController.pause(pid)
+            update_process_status(self.process_type, "paused")
+            sender.setTitle_("Resume")
+            self.progress.stopAnimation_(None)
+            self.paused = True
+
+    def relaunch_(self, sender):
+        """Relaunch the full app."""
+        import subprocess
+        logging.info("[ProgressWindow] Relaunching app")
+        if getattr(sys, 'frozen', False):
+            # Frozen app: use 'open' command to launch the .app bundle
+            app_path = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+            subprocess.Popen(['open', app_path])
+        else:
+            # Development: just run the script
+            subprocess.Popen([sys.executable, os.path.join(BASE_PATH, 'macos_wrapper.py')])
+
+    def windowWillClose_(self, notification):
+        """Handle window close - exit app."""
+        logging.info("[ProgressWindow] Window closing, exiting")
+        self._cleanup()
+        os._exit(0)
+
+    def _cleanup(self):
+        """Clean up timer and resources."""
+        if self.timer:
+            self.timer.invalidate()
+            self.timer = None
+
+    def show(self):
+        """Display the window."""
+        self.window.makeKeyAndOrderFront_(None)
+
+
+def show_progress_window():
+    """Show the native progress monitoring window."""
+    global _progress_window_controller, _main_window_ref
+
+    if not NATIVE_APIS_AVAILABLE:
+        logging.warning("[ProgressWindow] Native APIs not available, exiting")
+        os._exit(0)
+        return
+
+    # Determine which process to monitor
+    processes = get_active_process_list()
+    if not processes:
+        logging.warning("[ProgressWindow] No active processes to monitor")
+        os._exit(0)
+        return
+
+    # Prioritize training, then extract, then preprocess
+    priority = ["training", "extract", "preprocess", "tts", "inference"]
+    process_type = None
+    process_info = None
+    for ptype in priority:
+        for p in processes:
+            if p["type"] == ptype:
+                process_type = ptype
+                process_info = p
+                break
+        if process_type:
+            break
+
+    if not process_type:
+        process_type = processes[0]["type"]
+        process_info = processes[0]
+
+    logging.info(f"[ProgressWindow] Creating native window for {process_type}")
+
+    # Close main window if still open
+    if _main_window_ref:
+        try:
+            _main_window_ref.destroy()
+        except:
+            pass
+
+    # Create and show native progress window
+    _progress_window_controller = ProgressWindowController(process_type, process_info)
+    _progress_window_controller.show()
+
 
 def on_window_closing():
     """Handle main window closing event.
@@ -336,7 +615,7 @@ def on_window_closing():
     CRITICAL: pywebview's closing event honors return False to prevent closing.
     The Event.set() method returns True if any handler returns False.
     """
-    global _shutting_down, _close_confirmation_window
+    global _shutting_down
 
     # Prevent multiple shutdown attempts
     if _shutting_down:
@@ -370,7 +649,7 @@ def on_window_closing():
     if has_active_processes():
         logging.info("[Window] Active processes detected, showing confirmation")
 
-        # IMPORTANT: Show confirmation dialog immediately
+        # IMPORTANT: Show native confirmation dialog immediately
         # The dialog will handle the actual exit decision
         show_close_confirmation_dialog()
 
@@ -381,136 +660,6 @@ def on_window_closing():
     else:
         logging.info("[Window] No active processes, exiting cleanly")
         os._exit(0)
-        # Note: os._exit(0) never returns, so no unreachable code after it
-
-class ProgressMonitorApi:
-    """API for progress monitoring window."""
-
-    def __init__(self, process_type):
-        self.process_type = process_type
-
-    def get_initial_state(self):
-        """Get current process state."""
-        state = read_active_processes()
-        info = state.get("processes", {}).get(self.process_type, {})
-        return {
-            "processType": self.process_type.capitalize(),
-            "progress": 0,  # Would need log parsing
-            "eta": "--",
-            "details": info.get("model_name", "Running..."),
-            "elapsed": self._get_elapsed(info.get("started_at"))
-        }
-
-    def _get_elapsed(self, started_at):
-        if not started_at:
-            return "--"
-        try:
-            start = datetime.datetime.fromisoformat(started_at)
-            elapsed = datetime.datetime.now() - start
-            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        except:
-            return "--"
-
-    def terminate(self):
-        """Terminate the process."""
-        state = read_active_processes()
-        info = state.get("processes", {}).get(self.process_type)
-        if info and info.get("pid"):
-            ProcessController.terminate(info["pid"])
-            clear_process(self.process_type)
-        os._exit(0)
-
-    def pause(self):
-        """Pause the process."""
-        state = read_active_processes()
-        info = state.get("processes", {}).get(self.process_type)
-        if info and info.get("pid"):
-            ProcessController.pause(info["pid"])
-            update_process_status(self.process_type, "paused")
-
-    def resume(self):
-        """Resume the process."""
-        state = read_active_processes()
-        info = state.get("processes", {}).get(self.process_type)
-        if info and info.get("pid"):
-            ProcessController.resume(info["pid"])
-            update_process_status(self.process_type, "running")
-
-    def relaunch(self):
-        """Relaunch the full app."""
-        import subprocess
-        if getattr(sys, 'frozen', False):
-            # Frozen app: use 'open' command to launch the .app bundle
-            app_path = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
-            subprocess.Popen(['open', app_path])
-        else:
-            # Development: just run the script
-            subprocess.Popen([sys.executable, os.path.join(BASE_PATH, 'macos_wrapper.py')])
-        # Don't exit - let user close progress window
-
-    def resize_window(self, width, height):
-        """Resize the window."""
-        global _progress_window
-        if _progress_window:
-            _progress_window.resize(width, height)
-
-
-def show_progress_window():
-    """Show the progress monitoring window."""
-    global _progress_window, _main_window_ref
-
-    # Determine which process to monitor
-    processes = get_active_process_list()
-    if not processes:
-        logging.warning("[ProgressWindow] No active processes to monitor")
-        os._exit(0)
-        return
-
-    # Prioritize training, then extract, then preprocess
-    priority = ["training", "extract", "preprocess", "tts", "inference"]
-    process_type = None
-    for ptype in priority:
-        for p in processes:
-            if p["type"] == ptype:
-                process_type = ptype
-                break
-        if process_type:
-            break
-
-    if not process_type:
-        process_type = processes[0]["type"]
-
-    # Close main window if still open
-    if _main_window_ref:
-        try:
-            _main_window_ref.destroy()
-        except:
-            pass
-
-    # Read HTML template
-    html_path = os.path.join(BASE_PATH, "assets", "progress_monitor.html")
-    try:
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-    except Exception as e:
-        logging.error(f"Failed to load progress_monitor.html: {e}")
-        os._exit(0)
-        return
-
-    _progress_window = webview.create_window(
-        "Applio Process Monitor",
-        html=html_content,
-        width=480,
-        height=280,
-        resizable=True,
-        min_size=(400, 250),
-        js_api=ProgressMonitorApi(process_type)
-    )
-
-    # When progress window closes, just exit
-    _progress_window.events.closed += lambda: os._exit(0)
 
 
 # =================================================================
