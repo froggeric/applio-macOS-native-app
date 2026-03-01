@@ -173,8 +173,13 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - Notarization fails for PyInstaller apps - users run `xattr -cr Applio.app`
 
 **Pywebview gotchas:**
-- Windows created with `webview.create_window()` MUST be assigned to a global variable (e.g., `_about_window`, `_update_window`) to prevent garbage collection
 - Menu callbacks need lambda wrappers: `MenuAction("About", lambda: show_about_dialog())` not `MenuAction("About", show_about_dialog)`
+
+**Native macOS dialogs (PyObjC):**
+- All dialogs use native NSAlert/NSWindow/NSPanel instead of pywebview HTML
+- CRITICAL: Native windows need `AppHelper.runConsoleEventLoop()` after `makeKeyAndOrderFront_()` to keep window alive - otherwise app exits immediately
+- NSAlert for confirmations, NSWindow for complex UIs, NSPanel for utility windows
+- Dialog classes: `AboutWindowController`, `ProgressWindowController` in `macos_wrapper.py`
 
 **Patch idempotency pattern:**
 - Each patch function must check for its OWN specific marker (e.g., `if '_track_process("training"' in content`)
