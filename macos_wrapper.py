@@ -1131,6 +1131,7 @@ _about_window = None
 def show_about_dialog():
     """Display the About Applio dialog in a webview window."""
     global _about_window
+    logging.info("[About Menu] show_about_dialog() called")
 
     # Read the about HTML template
     about_html_path = os.path.join(BASE_PATH, "assets", "about.html")
@@ -1196,8 +1197,8 @@ def get_native_menu():
             ]),
         ]),
         Menu("Applio", [
-            MenuAction("About Applio", show_about_dialog),
-            MenuAction("Check for Updates...", check_for_updates),
+            MenuAction("About Applio", lambda: show_about_dialog()),
+            MenuAction("Check for Updates...", lambda: check_for_updates()),
             MenuSeparator(),
             MenuAction("Services", lambda: None),
             MenuSeparator(),
