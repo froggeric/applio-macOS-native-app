@@ -32,6 +32,7 @@ For immediate studio application, utilize the following summary tables. Detailed
 | :--- | :--- | :--- |
 | **Sample Rate** | 48000Hz or 44100Hz | Prevents high-frequency "brickwall" cutoffs at 16kHz. |
 | **Embedder Model** | `contentvec_base_v2` | Best speaker disentanglement; prevents source vocal bleed. |
+| **Training F0** | `RMVPE` | Ignores dataset noise, building a flawless mathematical pitch map. |
 | **Batch Size** | 8 | Introduces necessary gradient noise to capture human texture. |
 | **Total Epochs** | 150 to 300 (Scales to data) | Shorter dataset = more epochs. Longer dataset = fewer epochs. |
 | **Index Algorithm** | `faiss` (or `KMeans`) | Creates a high-res dictionary; avoids "Auto" blurring. |
@@ -40,7 +41,7 @@ For immediate studio application, utilize the following summary tables. Detailed
 ### Table 3: Applio Inference Settings (Voice Conversion)
 | Parameter | Studio Recommendation | Rationale |
 | :--- | :--- | :--- |
-| **F0 Pitch Algorithm** | `RMVPE` (or `Mangio-Crepe`) | RMVPE for stability. Crepe (Hop 64) for micro-details on dry audio. |
+| **Inference F0** | `RMVPE` or `Mangio-Crepe` | RMVPE for stability. Crepe (Hop 64) for micro-details on dry audio. |
 | **Feature Retrieval (Index)** | 0.60 to 0.75 | Balances clone accuracy (high) with artifact reduction (low). |
 | **Protect Voiceless** | 0.33 | Preserves consonants. 0.5 flatlines pitch; 0 creates robotic "S" sounds. |
 | **RMS Mix Rate** | 0.80 to 1.00 | Retains the volume dynamics of your human guide vocal for DAW mixing. |
@@ -141,7 +142,7 @@ In the pursuit of studio quality, certain cutting-edge updates and legacy defaul
 *   **KLM9 48k (Spin V2 Embedder):** While the 48k resolution is high, the "Spin V2" feature extractor algorithm is fundamentally bugged regarding English and Korean phonetics. It crushes pronunciation, causing the AI to slur consonants and mumble. 
 *   **"Mini" Base Models (e.g., KLM5.0 Mini):** These are lightweight developer testing models trained on minimal data. They lack the neural vocabulary to understand complex pitch changes and will glitch out on dynamic singing runs.
 *   **Standard RVC v2 40k Defaults:** The default Chinese pre-trains lack high-end extension and were trained with mild background noise, which they will bake into your output. 
-*   **FCPE Pitch Extraction (For Singing):** Prone to dropping pitches and hallucinating notes on complex melodies. Too unstable for professional reliance.
+*   **Harvest / PM / DIO (Pitch Extractors):** Legacy F0 algorithms. PM is fast but terrible quality. Harvest hallucinates breaths as notes. They are obsolete in modern workflows.
 
 ---
 
@@ -149,31 +150,36 @@ In the pursuit of studio quality, certain cutting-edge updates and legacy defaul
 
 When your goal is professional studio-grade audio, convenience-based training metrics must be abandoned. How the neural network learns is just as important as the pre-trained base model. 
 
-### A. Total Epochs (The Scaling Rule)
+### A. F0 Pitch Extraction Algorithm (Training)
+You do *not* have to use the same pitch extraction engine for training and inference. The goal of training F0 is to build a flawless mathematical pitch map of your target dataset.
+*   **The Studio Mandate:** **Always train with RMVPE.**
+*   **The Rationale:** Even the best datasets have microscopic imperfections (room tone, slight headphone bleed). RMVPE is incredibly resilient to noise. It ensures the model only learns the fundamental vocal pitch, ignoring the background. If you train with a highly sensitive algorithm like Crepe, the model will mistakenly learn to synthesize background noise as part of the vocal tone, resulting in a dirty, scratchy AI voice. 
+
+### B. Total Epochs (The Scaling Rule)
 An "Epoch" is one complete pass through your dataset. The correct number of Epochs to train depends entirely on the length of your clean dataset.
 *   **10 to 15 Minutes of Data (Standard):** Train for **250 to 300 Epochs**.
 *   **30+ Minutes of Data (Large):** Train for **100 to 150 Epochs**.
 *   **1 to 3 Minutes of Data (Tiny):** Train for **400 to 500 Epochs**.
 *   *The Studio Rule:* Save your model every 25 to 50 Epochs. The model will eventually "overfit" (memorize background noise and become robotic). You must A/B test the last few saved `.pth` files to find the exact peak before degradation occurred.
 
-### B. Batch Size: 8 vs. 4
+### C. Batch Size: 8 vs. 4
 Batch size dictates how many audio chunks the neural network analyzes simultaneously before updating its weights.
 *   **The Recommendation:** **`8`** is the studio sweet spot.
 *   **Why Batch Size 4 is worse for standard datasets:** While some theorize that dropping the batch size to 4 forces the model to learn more "micro-details," it actually introduces excessive *gradient noise*. The model's weights bounce around too violently during training, which can result in a "scratchy" or unstable vocal tone. 
 *   *Exception:* Only drop to a batch size of 4 if your dataset is critically small (under 2 minutes) or if your GPU VRAM is severely limited.
 
-### C. The Embedder Model (Feature Extractor)
+### D. The Embedder Model (Feature Extractor)
 *   **The Recommendation:** **`contentvec_base_v2`** (or `contentvec`).
 *   **The Science:** `contentvec` was specifically engineered by Microsoft for *speaker disentanglement*. It is mathematically skilled at separating *what* is being said from *who* is saying it. Standard `hubert_base` often accidentally bakes the original source singer's vocal weight into the final output. `contentvec` ensures your AI voice sounds exactly like your target dataset.
 
-### D. The Index Algorithm
+### E. The Index Algorithm
 After the model finishes training, Applio generates an `.index` file—a massive dictionary of your dataset's vocal tones. Applio usually offers three choices: `Auto`, `Faiss`, or `KMeans`.
 *   **The Recommendation:** **`faiss`**.
 *   **Why it wins:** Selecting `faiss` forces the builder to utilize Facebook's AI Similarity Search directly (typically creating a high-resolution FlatL2 index). This results in a larger file size, but it retains the highest 1:1 fidelity of your dataset's micro-expressions.
 *   **Why to avoid `kmeans`:** KMeans aggressively clusters the data points, grouping similar sounds together and averaging them out to save RAM. It creates a tiny file but blurs the intricate details of the voice. `Auto` usually defaults to a fast KMeans approach and should be avoided.
 
-### E. Overtraining Detector (Why Early Stopping Ruins Models)
-*   **The Recommendation:** **Turn it OFF / Disable it.** (If the UI has an "early stopping" or "overtraining" toggle, disable it. If it uses a numerical threshold, set it to an impossible number like 1000).
+### F. Overtraining Detector (Why Early Stopping Ruins Models)
+*   **The Recommendation:** **Turn it OFF / Disable it.** (If the UI uses a numerical patience threshold, set it to an impossible number like 1000).
 *   **The Proof & Architectural Reasoning:** 
     Applio's automated stopping features monitor mathematical "loss." In a standard machine learning model, a rising loss curve means the model is degrading. However, RVC utilizes **VITS**, built on a **GAN (Generative Adversarial Network)** architecture. 
     A GAN consists of two neural networks fighting each other (Generator vs. Discriminator). Because they are competing, the loss graphs are highly deceptive. If the Generator's numerical loss spikes upward, it frequently means the Generator is attempting to learn complex, chaotic human textures (such as vocal fry, breathiness, or rasp), temporarily increasing mathematical error before resolving into high-fidelity audio. 
@@ -185,15 +191,29 @@ After the model finishes training, Applio generates an `.index` file—a massive
 
 A perfectly trained model can still output terrible audio if the inference (conversion) settings are misconfigured. To extract the highest studio fidelity during voice generation, apply these strict parameters.
 
-### A. F0 Pitch Extraction Algorithm
-You do *not* have to use the same pitch extraction engine for training and inference.
-*   **RMVPE (Robust Minute Voice Pitch Estimator):** *The Studio Standard.* RMVPE is the undisputed champion for stability. It excels at ignoring background noise in the source audio and locks onto the fundamental frequency with minimal jitter. Safest choice for 95% of studio scenarios.
-*   **Mangio-Crepe:** *The High-Fidelity Alternative.* A customized fork of Crepe. It allows you to adjust the **Hop Length** (dropping it to 64 or 32). Lower hop lengths yield vastly superior micro-pitch accuracy, capturing tiny human vocal inflections perfectly. **Warning:** Crepe is highly noise-sensitive. If your guide vocal has headphone bleed, Crepe will pitch-track the noise, resulting in screeching artifacts. Use only on perfectly isolated, dry vocals.
+### A. F0 Pitch Extraction Algorithm (Inference)
+The inference F0 algorithm determines how accurately the AI tracks the melody and inflections of your input *guide vocal*. You have two studio-grade options depending on the acoustic purity of your source audio:
+
+#### 1. RMVPE (Robust Minute Voice Pitch Estimator) - *The Gold Standard*
+*   **The Verdict:** The safest, most reliable choice for 95% of studio scenarios.
+*   **Why it wins:** RMVPE is the undisputed community champion for stability. It excels at ignoring background noise, slight reverb, or headphone bleed in the source audio. It locks onto the fundamental frequency with minimal jitter, ensuring the AI produces a smooth, unbroken vocal line even if the guide vocal recording is less than perfect. 
+
+#### 2. Mangio-Crepe - *The High-Fidelity Alternative*
+*   **The Verdict:** The ultimate tool for capturing emotional nuance, but highly unforgiving. 
+*   **Crepe vs. Mangio-Crepe:** The original Crepe algorithm utilizes a fixed analysis window. "Mangio-Crepe" is a customized fork developed by the community that allows the user to manually adjust the **Hop Length** (the size of the audio chunks it analyzes per frame). 
+*   **The Hop Length Strategy:** 
+    *   *Hop Length 128:* Standard, fast, similar to RMVPE but slightly more expressive.
+    *   *Hop Length 64:* The sweet spot for high-fidelity singing. It catches tiny human vocal inflections—subtle growls, fast vibrato, and dynamic slides—that RMVPE often smooths over. 
+    *   *Hop Length 32:* Ultra-resolution. Captures maximum emotion but takes significantly longer to render.
+*   **The Catch:** Crepe is highly noise-sensitive. If your input guide vocal has *any* background noise, breath clipping, or room reflection, Mangio-Crepe will attempt to pitch-track that noise, resulting in chaotic screeching artifacts in the AI output. **Use only on perfectly isolated, dead-dry vocals.**
+
+#### 3. FCPE (Fast Context-aware Pitch Estimator) - *Avoid for Singing*
+*   **The Verdict:** Designed for low-latency, fluid speech synthesis, FCPE is often recommended by casual users for its speed. However, audio engineers agree it is a poor performer for music. It introduces micro-jitter on sustained sung notes and frequently hallucinates pitches during fast melodic runs. 
 
 ### B. Feature Retrieval (Index Rate)
 The Index Rate controls how heavily the AI relies on the `.index` dictionary file you generated during training to dictate the "accent" and "texture" of the voice.
 *   **The Sweet Spot:** **0.60 to 0.75**.
-*   **Why 1.0 is bad:** Setting it to maximum forces the AI to strictly copy the index file, which often introduces mechanical artifacts, stuttering, and loss of emotional dynamic range.
+*   **Why 1.0 is bad:** Setting it to maximum forces the AI to strictly copy the index file, which often introduces mechanical artifacts, stuttering, and a loss of emotional dynamic range from the guide vocal.
 *   **Why 0.0 is bad:** Setting it to zero ignores your dataset's unique texture, making the output sound generic, hollow, or heavily biased toward the pre-trained base model.
 
 ### C. Protect Voiceless Consonants
