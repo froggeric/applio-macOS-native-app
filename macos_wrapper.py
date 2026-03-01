@@ -327,45 +327,60 @@ def show_close_confirmation_dialog():
 class ProgressWindowController:
     """Native macOS progress monitoring window.
 
-    Uses a closure-based approach for window close handling since
+    Uses NSNotificationCenter for window close handling since
     we're a plain Python class, not an NSObject.
     """
 
     def __init__(self, process_type, process_info):
         from AppKit import (
-            NSWindow, NSButton, NSTextField, NSProgressIndicator,
-            NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
-            NSBackingStoreBuffered, NSCenterTextAlignment, NSFont
+            NSWindow, NSButton, NSTextField, NSProgressIndicator, NSScrollView,
+            NSTextView, NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
+            NSBackingStoreBuffered, NSCenterTextAlignment, NSFont, NSBezelBorder
         )
+        from Foundation import NSNotificationCenter
 
         self.process_type = process_type
         self.process_info = process_info
         self.paused = False
         self.start_time = datetime.datetime.now()
         self.timer = None
+        self._observer = None
+        self.log_lines = []  # Store recent log lines
+        self.max_log_lines = 100  # Maximum lines to keep
+        self._last_status = None  # Track last status to detect changes
 
-        # Create window (400x300)
+        # Create window (450x450) - taller to accommodate log view
         style = NSTitledWindowMask | NSClosableWindowMask
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 400, 300),
+            NSMakeRect(0, 0, 450, 450),
             style,
             NSBackingStoreBuffered,
             False
         )
         self.window.setTitle_(f"Applio - {process_type.capitalize()}")
         self.window.center()
-        # Note: We don't set a delegate because this is not an NSObject.
-        # Window close is handled by the caller checking if window is visible.
+        self.window.setReleasedWhenClosed_(False)  # Keep window object alive
+
+        # Register for window close notification using NSNotificationCenter
+        # This works with plain Python classes unlike delegate pattern
+        notification_center = NSNotificationCenter.defaultCenter()
+        self._observer = notification_center.addObserver_selector_name_object_(
+            self,
+            "windowDidClose:",
+            "NSWindowWillCloseNotification",
+            self.window
+        )
 
         # Build UI elements
-        y = 260  # Start from top
+        y = 410  # Start from top
         label_height = 20
         button_height = 28
         padding = 12
+        window_width = 450
 
         # Process type label (bold)
         self.type_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - label_height, 368, label_height)
+            NSMakeRect(padding, y - label_height, window_width - 2*padding, label_height)
         )
         self.type_label.setStringValue_(f"{process_type.capitalize()} Process")
         self.type_label.setBezeled_(False)
@@ -382,7 +397,7 @@ class ProgressWindowController:
         # Details label (model name or other info)
         details = process_info.get("model_name") or process_info.get("details", "Running...")
         self.details_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - label_height, 368, label_height)
+            NSMakeRect(padding, y - label_height, window_width - 2*padding, label_height)
         )
         self.details_label.setStringValue_(details)
         self.details_label.setBezeled_(False)
@@ -396,7 +411,7 @@ class ProgressWindowController:
 
         # Elapsed time label
         self.time_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - label_height, 368, label_height)
+            NSMakeRect(padding, y - label_height, window_width - 2*padding, label_height)
         )
         self.time_label.setStringValue_("Elapsed: 00:00:00")
         self.time_label.setBezeled_(False)
@@ -410,7 +425,7 @@ class ProgressWindowController:
 
         # Status label
         self.status_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - label_height, 368, label_height)
+            NSMakeRect(padding, y - label_height, window_width - 2*padding, label_height)
         )
         self.status_label.setStringValue_("Status: Running")
         self.status_label.setBezeled_(False)
@@ -424,7 +439,7 @@ class ProgressWindowController:
 
         # Progress indicator (indeterminate)
         self.progress = NSProgressIndicator.alloc().initWithFrame_(
-            NSMakeRect(100, y - 20, 200, 20)
+            NSMakeRect(125, y - 20, 200, 20)
         )
         self.progress.setIndeterminate_(True)
         self.progress.startAnimation_(None)
@@ -432,11 +447,45 @@ class ProgressWindowController:
 
         y -= 30 + padding
 
-        # Buttons row
-        button_width = 115
+        # Log view label
+        log_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - label_height, 100, label_height)
+        )
+        log_label.setStringValue_("Recent Activity:")
+        log_label.setBezeled_(False)
+        log_label.setDrawsBackground_(False)
+        log_label.setEditable_(False)
+        log_label.setSelectable_(False)
+        bold_font_small = NSFont.boldSystemFontOfSize_(12)
+        log_label.setFont_(bold_font_small)
+        self.window.contentView().addSubview_(log_label)
+
+        y -= label_height + 4
+
+        # Log view (scrollable text view)
+        log_height = 140
+        self.log_scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(padding, y - log_height, window_width - 2*padding, log_height)
+        )
+        self.log_scroll.setHasVerticalScroller_(True)
+        self.log_scroll.setBorderType_(NSBezelBorder)
+
+        self.log_view = NSTextView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, window_width - 2*padding - 20, log_height)
+        )
+        self.log_view.setEditable_(False)
+        self.log_view.setFont_(NSFont.systemFontOfSize_(11))
+        self.log_view.setString_("Waiting for activity...")
+        self.log_scroll.setDocumentView_(self.log_view)
+        self.window.contentView().addSubview_(self.log_scroll)
+
+        y -= log_height + padding
+
+        # First button row: Terminate, Pause, Relaunch
+        button_width = 130
         button_spacing = 10
         total_buttons_width = (button_width * 3) + (button_spacing * 2)
-        start_x = (400 - total_buttons_width) / 2
+        start_x = (window_width - total_buttons_width) / 2
 
         # Terminate button
         self.terminate_btn = NSButton.alloc().initWithFrame_(
@@ -468,6 +517,24 @@ class ProgressWindowController:
         self.relaunch_btn.setTarget_(self)
         self.window.contentView().addSubview_(self.relaunch_btn)
 
+        y -= button_height + padding
+
+        # Second button row: Open Logs Folder
+        open_logs_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x + button_width + button_spacing, y - button_height, button_width, button_height)
+        )
+        open_logs_btn.setTitle_("Open Logs Folder")
+        open_logs_btn.setBezelStyle_(1)  # Rounded
+        open_logs_btn.setAction_("openLogsFolder:")
+        open_logs_btn.setTarget_(self)
+        self.window.contentView().addSubview_(open_logs_btn)
+
+        # Add initial log entry
+        model_name = process_info.get("model_name", "Unknown")
+        self._add_log_line(f"[{self._get_timestamp()}] Monitoring started for: {model_name}")
+        self._add_log_line(f"[{self._get_timestamp()}] Process type: {process_type.capitalize()}")
+        self._last_status = "running"
+
         # Start elapsed time updater
         self._start_timer()
 
@@ -492,7 +559,7 @@ class ProgressWindowController:
         )
 
     def updateElapsedTime_(self, sender):
-        """Update the elapsed time label."""
+        """Update the elapsed time label and log view."""
         elapsed = datetime.datetime.now() - self.start_time
         hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -504,6 +571,46 @@ class ProgressWindowController:
         if info:
             status = info.get("status", "running")
             self.status_label.setStringValue_(f"Status: {status.capitalize()}")
+
+            # Add status changes to log view
+            if status != getattr(self, '_last_status', None):
+                self._last_status = status
+                self._add_log_line(f"[{self._get_timestamp()}] Status: {status.capitalize()}")
+
+    def _get_timestamp(self):
+        """Get current timestamp for log entries."""
+        now = datetime.datetime.now()
+        return f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+
+    def _add_log_line(self, line):
+        """Add a line to the log view."""
+        self.log_lines.append(line)
+        if len(self.log_lines) > self.max_log_lines:
+            self.log_lines = self.log_lines[-self.max_log_lines:]
+        self.log_view.setString_("\n".join(self.log_lines))
+        # Scroll to bottom
+        self.log_scroll.reflectScrolledClipView_(self.log_scroll.contentView())
+
+    def openLogsFolder_(self, sender):
+        """Open the training logs folder in Finder."""
+        import subprocess
+        model_name = self.process_info.get("model_name", "")
+        if model_name:
+            # Get the data path from preferences or environment
+            from os.path import expanduser, join
+            data_path = os.environ.get("APPLIO_DATA_PATH", expanduser("~/Applio"))
+            logs_folder = join(data_path, "logs", model_name)
+            if os.path.exists(logs_folder):
+                subprocess.run(["open", logs_folder])
+                self._add_log_line(f"[{self._get_timestamp()}] Opened folder: {logs_folder}")
+            else:
+                # Fall back to main logs folder
+                logs_main = join(data_path, "logs")
+                if os.path.exists(logs_main):
+                    subprocess.run(["open", logs_main])
+                    self._add_log_line(f"[{self._get_timestamp()}] Opened folder: {logs_main}")
+        else:
+            self._add_log_line(f"[{self._get_timestamp()}] No model name available")
 
     def terminate_(self, sender):
         """Terminate the process and exit."""
@@ -554,11 +661,23 @@ class ProgressWindowController:
         self._cleanup()
         os._exit(0)
 
+    def windowDidClose_(self, notification):
+        """Handle window close notification from NSNotificationCenter."""
+        logging.info("[ProgressWindow] Window closed by user, exiting")
+        self._cleanup()
+        # Process continues in background, just exit the monitor app
+        os._exit(0)
+
     def _cleanup(self):
         """Clean up timer and resources."""
         if self.timer:
             self.timer.invalidate()
             self.timer = None
+        # Remove notification observer
+        if self._observer:
+            from Foundation import NSNotificationCenter
+            NSNotificationCenter.defaultCenter().removeObserver_(self._observer)
+            self._observer = None
 
     def show(self):
         """Display the window."""
@@ -570,7 +689,22 @@ class ProgressWindowController:
 
 
 def show_progress_window():
-    """Show the native progress monitoring window."""
+    """Show the native progress monitoring window.
+
+    CRITICAL ARCHITECTURE NOTE:
+    This function is called from within a pywebview callback (on_window_closing).
+    PyWebview already runs a Cocoa event loop. We CANNOT use runConsoleEventLoop()
+    here because it would create a nested event loop, causing a beach ball/deadlock.
+
+    Instead, we:
+    1. Create and show the native window (non-blocking)
+    2. Destroy the pywebview main window
+    3. Return from this function (and the callback)
+    4. PyWebview's existing event loop continues to run and handles our native window
+
+    The native window stays open because it's retained by _progress_window_controller
+    and the NSApp event loop is still running (managed by pywebview).
+    """
     global _progress_window_controller, _main_window_ref
 
     if not NATIVE_APIS_AVAILABLE:
@@ -604,23 +738,25 @@ def show_progress_window():
 
     logging.info(f"[ProgressWindow] Creating native window for {process_type}")
 
-    # Close main window if still open
-    if _main_window_ref:
-        try:
-            _main_window_ref.destroy()
-        except:
-            pass
-
-    # Create and show native progress window
+    # Create and show native progress window BEFORE destroying pywebview window
+    # This ensures the native window is on the run loop before pywebview cleans up
     _progress_window_controller = ProgressWindowController(process_type, process_info)
     _progress_window_controller.show()
-    logging.info("[ProgressWindow] Window shown, starting Cocoa event loop")
+    logging.info("[ProgressWindow] Native window shown successfully")
 
-    # CRITICAL: Start Cocoa event loop to keep the window alive.
-    # This blocks until the window is closed (which calls os._exit(0)).
-    # Without this, the function returns and the app exits immediately.
-    from PyObjCTools import AppHelper
-    AppHelper.runConsoleEventLoop(installInterrupt=True)
+    # HIDE the pywebview main window instead of destroying it
+    # PyWebview's event loop needs at least one window to stay alive.
+    # By hiding it, we keep the event loop running while showing only the native window.
+    if _main_window_ref:
+        try:
+            _main_window_ref.hide()
+            logging.info("[ProgressWindow] PyWebview main window hidden")
+        except Exception as e:
+            logging.warning(f"[ProgressWindow] Could not hide main window: {e}")
+
+    # DO NOT call runConsoleEventLoop() here!
+    # PyWebview's event loop is already running and will handle our native window.
+    # Just return and let the existing event loop continue.
 
 
 def on_window_closing():
