@@ -592,6 +592,7 @@ def check_for_updates():
     """
     global _update_window
     import logging
+    logging.info("[Update Menu] check_for_updates() called")
 
     latest_version = None
     release_url = RELEASES_URL
@@ -1135,15 +1136,18 @@ def show_about_dialog():
 
     # Read the about HTML template
     about_html_path = os.path.join(BASE_PATH, "assets", "about.html")
+    logging.info(f"[About Menu] Loading HTML from: {about_html_path}")
     try:
         with open(about_html_path, 'r', encoding='utf-8') as f:
             about_html = f.read()
+        logging.info(f"[About Menu] HTML loaded successfully ({len(about_html)} bytes)")
     except Exception as e:
         logging.error(f"Failed to load about.html: {e}")
         return
 
     # Replace version placeholder with actual version
     about_html = about_html.replace("{{APPLIO_VERSION}}", f"v{VERSION}")
+    logging.info(f"[About Menu] Version placeholder replaced with: v{VERSION}")
 
     # Create API class for JavaScript callbacks
     class AboutApi:
@@ -1157,6 +1161,7 @@ def show_about_dialog():
             check_for_updates()
 
     # Create the about window
+    logging.info("[About Menu] Creating webview window...")
     _about_window = webview.create_window(
         "About Applio",
         html=about_html,
@@ -1167,6 +1172,7 @@ def show_about_dialog():
         max_size=(400, 300),
         js_api=AboutApi()
     )
+    logging.info("[About Menu] Window created successfully")
 
 def get_native_menu():
     from webview.menu import Menu, MenuAction, MenuSeparator
