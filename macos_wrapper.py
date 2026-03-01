@@ -275,6 +275,8 @@ _close_confirmation_window = None
 _progress_window = None
 _main_window_ref = None
 _update_window = None
+_window_close_prevented = False  # Flag to track if close was prevented
+_shutting_down = False  # Global flag to prevent multiple shutdown attempts
 
 class CloseConfirmationApi:
     """API for close confirmation dialog."""
@@ -328,7 +330,19 @@ def show_close_confirmation_dialog():
     )
 
 def on_window_closing():
-    """Handle main window closing event."""
+    """Handle main window closing event.
+
+    CRITICAL: pywebview doesn't reliably honor return values to prevent closing.
+    We use a global flag and immediate dialog show to handle this.
+    """
+    global _shutting_down, _close_confirmation_window
+
+    # Prevent multiple shutdown attempts
+    if _shutting_down:
+        logging.info("[Window] Already shutting down, ignoring duplicate close event")
+        return
+    _shutting_down = True
+
     # CRITICAL: Add logging immediately to verify this is called
     logging.info("[Window] on_window_closing() CALLED")
 
@@ -355,24 +369,14 @@ def on_window_closing():
 
     if has_active_processes():
         logging.info("[Window] Active processes detected, showing confirmation")
-        # IMPORTANT: Destroy the main window reference to prevent immediate close
-        # Then show the dialog which will handle the actual exit
-        global _main_window_ref
-        if _main_window_ref:
-            try:
-                # Don't destroy - just hide to prevent close
-                logging.info("[Window] Hiding main window instead of closing")
-                # We can't actually prevent the close, so we show dialog immediately
-            except Exception as e:
-                logging.error(f"[Window] Error hiding window: {e}")
 
-        # Show the confirmation dialog
+        # IMPORTANT: Show confirmation dialog immediately
+        # The dialog will handle the actual exit decision
         show_close_confirmation_dialog()
 
-        # CRITICAL: pywebview doesn't respect return False to prevent close
-        # The dialog will handle the actual exit via os._exit(0)
-        # Return False anyway in case some versions honor it
-        return False
+        # Don't call os._exit() here - let the dialog handle it
+        # Return None (no return value) since pywebview doesn't honor False
+        return
     else:
         logging.info("[Window] No active processes, exiting cleanly")
         os._exit(0)
@@ -1224,17 +1228,22 @@ def show_about_dialog():
 
     # Create the about window
     logging.info("[About Menu] Creating webview window...")
-    _about_window = webview.create_window(
-        "About Applio",
-        html=about_html,
-        width=400,
-        height=300,
-        resizable=False,
-        min_size=(400, 300),
-        max_size=(400, 300),
-        js_api=AboutApi()
-    )
-    logging.info("[About Menu] Window created successfully")
+    try:
+        _about_window = webview.create_window(
+            "About Applio",
+            html=about_html,
+            width=400,
+            height=300,
+            resizable=False,
+            min_size=(400, 300),
+            max_size=(400, 300),
+            js_api=AboutApi()
+        )
+        logging.info(f"[About Menu] Window created successfully: {_about_window}")
+    except Exception as e:
+        logging.error(f"[About Menu] Failed to create about window: {e}")
+        import traceback
+        logging.error(f"[About Menu] Traceback: {traceback.format_exc()}")
 
 # =================================================================
 # Menu Callback Wrappers

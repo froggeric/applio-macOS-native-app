@@ -110,11 +110,13 @@ def patch_footer_styles(file_path: str) -> bool:
         print("[patch_loading_html] Copyright styles already present")
         return True
 
-    # Add copyright line styles after the .footer CSS block
-    # Pattern finds the end of .footer CSS block (closing brace)
-    footer_style_pattern = r'(\.footer\s*{[^}]*letter-spacing:\s*[^;]+;[^}]*})'
+    # Add centering to .footer and copyright line styles
+    # Pattern finds the letter-spacing line in .footer CSS block
+    footer_style_pattern = r'(\.footer\s*{[^}]*letter-spacing:\s*[^;]+;)([^}]*})'
 
-    new_style = r'\1\n\n        #version-line,\n        #copyright-line {\n            display: block;\n            text-align: center;\n        }'
+    # Add left: 0; right: 0; text-align: center; to center the footer,
+    # and add styles for the version-line and copyright-line spans
+    new_style = r'\1\n            left: 0;\n            right: 0;\n            text-align: center;\2\n\n        #version-line,\n        #copyright-line {\n            display: inline-block;\n        }'
 
     if re.search(footer_style_pattern, content):
         new_content = re.sub(footer_style_pattern, new_style, content)
