@@ -74,6 +74,10 @@ GITHUB_REPO = "froggeric/applio-macOS-native-app"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
+# Import webview and urllib early - needed by check_for_updates()
+import webview
+import urllib.request
+import urllib.error
 
 # =================================================================
 # 1.6. Process Tracking for Background Operations
@@ -1030,10 +1034,6 @@ import threading
 import socket
 import http.server
 import socketserver
-import webview
-import urllib.request
-import urllib.error
-import json
 
 # =================================================================
 # 1.5. Copy bundled static resources to user's data location
