@@ -28,6 +28,8 @@ import signal
 import datetime
 import json
 import logging
+import urllib.request
+import urllib.error
 
 # macOS native APIs for preferences and dialogs
 # These are conditional imports - only needed for GUI mode
@@ -327,12 +329,52 @@ def show_close_confirmation_dialog():
 
 def on_window_closing():
     """Handle main window closing event."""
+    # CRITICAL: Add logging immediately to verify this is called
+    logging.info("[Window] on_window_closing() CALLED")
+
+    # Check for active processes with detailed diagnostics
+    state = read_active_processes()
+    logging.info(f"[Window] Process state: {state}")
+
+    # Debug: Check each process type
+    for ptype, info in state.get("processes", {}).items():
+        logging.info(f"[Window] Process type '{ptype}': {info}")
+        if info and info.get("pid"):
+            pid = info["pid"]
+            try:
+                import psutil
+                exists = psutil.pid_exists(pid)
+                logging.info(f"[Window]   PID {pid} exists: {exists}")
+            except ImportError:
+                try:
+                    os.kill(pid, 0)
+                    exists = True
+                except (ProcessLookupError, OSError):
+                    exists = False
+                logging.info(f"[Window]   PID {pid} exists: {exists}")
+
     if has_active_processes():
         logging.info("[Window] Active processes detected, showing confirmation")
+        # IMPORTANT: Destroy the main window reference to prevent immediate close
+        # Then show the dialog which will handle the actual exit
+        global _main_window_ref
+        if _main_window_ref:
+            try:
+                # Don't destroy - just hide to prevent close
+                logging.info("[Window] Hiding main window instead of closing")
+                # We can't actually prevent the close, so we show dialog immediately
+            except Exception as e:
+                logging.error(f"[Window] Error hiding window: {e}")
+
+        # Show the confirmation dialog
         show_close_confirmation_dialog()
-        return False  # Prevent close, dialog will handle exit
+
+        # CRITICAL: pywebview doesn't respect return False to prevent close
+        # The dialog will handle the actual exit via os._exit(0)
+        # Return False anyway in case some versions honor it
+        return False
     else:
-        logging.info("[Window] No active processes, exiting")
+        logging.info("[Window] No active processes, exiting cleanly")
         os._exit(0)
         # Note: os._exit(0) never returns, so no unreachable code after it
 
@@ -605,7 +647,10 @@ def check_for_updates():
     """
     global _update_window
     import logging
+    import traceback
     logging.info("[Update Menu] check_for_updates() called")
+    logging.info(f"[Update Menu] Current version: {VERSION}")
+    logging.info(f"[Update Menu] API URL: {API_URL}")
 
     latest_version = None
     release_url = RELEASES_URL
@@ -747,16 +792,23 @@ def check_for_updates():
         """
 
     # Show in a webview dialog
-    _update_window = webview.create_window(
-        "Check for Updates",
-        html=html_content,
-        width=400,
-        height=280,
-        resizable=False,
-        min_size=(400, 280),
-        maximizable=False,
-        fullscreenable=False
-    )
+    try:
+        logging.info("[Update Menu] Creating update window...")
+        _update_window = webview.create_window(
+            "Check for Updates",
+            html=html_content,
+            width=400,
+            height=280,
+            resizable=False,
+            min_size=(400, 280),
+            maximizable=False,
+            fullscreenable=False
+        )
+        logging.info("[Update Menu] Update window created successfully")
+    except Exception as e:
+        logging.error(f"[Update Menu] Failed to create update window: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # =================================================================
@@ -1046,9 +1098,6 @@ import socket
 import http.server
 import socketserver
 import webview
-import urllib.request
-import urllib.error
-import json
 
 # =================================================================
 # 1.5. Copy bundled static resources to user's data location
@@ -1187,6 +1236,32 @@ def show_about_dialog():
     )
     logging.info("[About Menu] Window created successfully")
 
+# =================================================================
+# Menu Callback Wrappers
+# =================================================================
+# These module-level functions are used as menu callbacks to avoid
+# issues with lambda serialization in pywebview's menu system.
+
+def _menu_callback_about():
+    """Menu callback for About Applio."""
+    logging.info("[About Menu] _menu_callback_about() called")
+    try:
+        show_about_dialog()
+        logging.info("[About Menu] _menu_callback_about() completed successfully")
+    except Exception as e:
+        logging.error(f"[About Menu] _menu_callback_about() failed: {e}")
+        logging.exception(e)
+
+def _menu_callback_check_updates():
+    """Menu callback for Check for Updates."""
+    logging.info("[Update Menu] _menu_callback_check_updates() called")
+    try:
+        check_for_updates()
+        logging.info("[Update Menu] _menu_callback_check_updates() completed successfully")
+    except Exception as e:
+        logging.error(f"[Update Menu] _menu_callback_check_updates() failed: {e}")
+        logging.exception(e)
+
 def get_native_menu():
     from webview.menu import Menu, MenuAction, MenuSeparator
     def open_in_finder(subpath: str):
@@ -1216,8 +1291,8 @@ def get_native_menu():
             ]),
         ]),
         Menu("Applio", [
-            MenuAction("About Applio", lambda: show_about_dialog()),
-            MenuAction("Check for Updates...", lambda: check_for_updates()),
+            MenuAction("About Applio", _menu_callback_about),
+            MenuAction("Check for Updates...", _menu_callback_check_updates),
             MenuSeparator(),
             MenuAction("Services", lambda: None),
             MenuSeparator(),
