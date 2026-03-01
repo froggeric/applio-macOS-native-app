@@ -273,7 +273,6 @@ class ProcessController:
 
 # Global references to prevent garbage collection
 _main_window_ref = None
-_update_window = None
 _shutting_down = False  # Global flag to prevent multiple shutdown attempts
 _progress_window_controller = None  # Native progress window controller
 
@@ -794,14 +793,11 @@ def check_for_updates():
     Check for updates by querying the GitHub API.
 
     Compares the current VERSION with the latest release tag_name.
-    Shows a webview dialog with the result:
+    Shows a native NSAlert dialog with the result:
     - Up to date: confirmation message
-    - Update available: link to releases page
-    - Error: graceful error message with link to releases
+    - Update available: option to open releases page
+    - Error: graceful error message
     """
-    global _update_window
-    import logging
-    import traceback
     logging.info("[Update Menu] check_for_updates() called")
     logging.info(f"[Update Menu] Current version: {VERSION}")
     logging.info(f"[Update Menu] API URL: {API_URL}")
@@ -843,126 +839,57 @@ def check_for_updates():
         error_message = str(e)
         logging.warning(f"Update check failed: {error_message}")
 
-    # Build HTML response
+    # Show native NSAlert
+    if not NATIVE_APIS_AVAILABLE:
+        logging.warning("[Update Menu] Native APIs not available")
+        return
+
+    from AppKit import NSAlert, NSAlertFirstButtonReturn, NSWorkspace, NSURL
+    import subprocess
+
+    alert = NSAlert.alloc().init()
+
     if error_message:
         # Error case
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    padding: 20px;
-                    text-align: center;
-                    background: #1a1a2e;
-                    color: #eee;
-                }}
-                h2 {{ color: #ff6b6b; }}
-                p {{ margin: 15px 0; }}
-                a {{
-                    color: #4ecdc4;
-                    text-decoration: none;
-                }}
-                a:hover {{ text-decoration: underline; }}
-                .error {{ color: #888; font-size: 12px; }}
-            </style>
-        </head>
-        <body>
-            <h2>Could Not Check for Updates</h2>
-            <p>An error occurred while checking for updates.</p>
-            <p><a href="{release_url}" onclick="window.open(this.href); return false;">View Releases on GitHub</a></p>
-            <p class="error">Error: {error_message}</p>
-        </body>
-        </html>
-        """
+        alert.setMessageText_("Could Not Check for Updates")
+        alert.setInformativeText_(
+            f"An error occurred while checking for updates.\n\n"
+            f"Error: {error_message}\n\n"
+            "You can manually check for updates on GitHub."
+        )
+        alert.addButtonWithTitle_("Open GitHub Releases")
+        alert.addButtonWithTitle_("OK")
+        alert.setAlertStyle_(2)  # NSAlertStyleWarning
+
+        response = alert.runModal()
+        if response == NSAlertFirstButtonReturn:
+            subprocess.Popen(['open', release_url])
+
     elif latest_version and latest_version != VERSION:
         # Update available
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    padding: 20px;
-                    text-align: center;
-                    background: #1a1a2e;
-                    color: #eee;
-                }}
-                h2 {{ color: #4ecdc4; }}
-                p {{ margin: 15px 0; }}
-                .current {{ color: #888; }}
-                .latest {{ color: #4ecdc4; font-weight: bold; }}
-                a {{
-                    display: inline-block;
-                    margin-top: 20px;
-                    padding: 10px 20px;
-                    background: #4ecdc4;
-                    color: #1a1a2e;
-                    text-decoration: none;
-                    border-radius: 5px;
-                    font-weight: bold;
-                }}
-                a:hover {{ background: #45b7aa; }}
-            </style>
-        </head>
-        <body>
-            <h2>Update Available</h2>
-            <p><span class="current">Current version: v{VERSION}</span></p>
-            <p><span class="latest">Latest version: v{latest_version}</span></p>
-            <p><a href="{release_url}" onclick="window.open(this.href); return false;">Download Update</a></p>
-        </body>
-        </html>
-        """
+        alert.setMessageText_("Update Available")
+        alert.setInformativeText_(
+            f"A new version of Applio is available.\n\n"
+            f"Current version: v{VERSION}\n"
+            f"Latest version: v{latest_version}\n\n"
+            "Would you like to download the update?"
+        )
+        alert.addButtonWithTitle_("Download Update")
+        alert.addButtonWithTitle_("Later")
+        alert.setAlertStyle_(1)  # NSAlertStyleInformational
+
+        response = alert.runModal()
+        if response == NSAlertFirstButtonReturn:
+            subprocess.Popen(['open', release_url])
+
     else:
         # Up to date
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    padding: 20px;
-                    text-align: center;
-                    background: #1a1a2e;
-                    color: #eee;
-                }}
-                h2 {{ color: #4ecdc4; }}
-                p {{ margin: 15px 0; }}
-                .version {{ color: #4ecdc4; font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <h2>You're Up to Date</h2>
-            <p>Applio is running the latest version.</p>
-            <p class="version">v{VERSION}</p>
-        </body>
-        </html>
-        """
+        alert.setMessageText_("You're Up to Date")
+        alert.setInformativeText_(f"Applio is running the latest version.\n\nVersion {VERSION}")
+        alert.addButtonWithTitle_("OK")
+        alert.setAlertStyle_(1)  # NSAlertStyleInformational
 
-    # Show in a webview dialog
-    try:
-        logging.info("[Update Menu] Creating update window...")
-        _update_window = webview.create_window(
-            "Check for Updates",
-            html=html_content,
-            width=400,
-            height=280,
-            resizable=False,
-            min_size=(400, 280),
-            maximizable=False,
-            fullscreenable=False
-        )
-        logging.info("[Update Menu] Update window created successfully")
-    except Exception as e:
-        logging.error(f"[Update Menu] Failed to create update window: {e}")
-        import traceback
-        traceback.print_exc()
+        alert.runModal()
 
 
 # =================================================================
@@ -1342,58 +1269,138 @@ setup_bundled_resources()
 # 2. UI Support & Native Menu
 # =================================================================
 
-# Global reference to about window (to prevent garbage collection)
-_about_window = None
+class AboutWindowController:
+    """Native macOS About window using NSPanel."""
+
+    def __init__(self):
+        from AppKit import (
+            NSPanel, NSTextField, NSButton, NSMakeRect,
+            NSTitledWindowMask, NSClosableWindowMask,
+            NSBackingStoreBuffered, NSCenterTextAlignment,
+            NSFont, NSFontBoldSystemFont, NSButtonBezelStyleRounded,
+            NSWorkspace, NSURL
+        )
+
+        # Create panel (380x260)
+        style = NSTitledWindowMask | NSClosableWindowMask
+        self.panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, 380, 280),
+            style,
+            NSBackingStoreBuffered,
+            False
+        )
+        self.panel.setTitle_("About Applio")
+        self.panel.center()
+
+        y = 250
+        padding = 20
+        content_width = 340
+
+        # App name (bold, large)
+        self.title_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 36, content_width, 36)
+        )
+        self.title_label.setStringValue_("APPLIO")
+        self.title_label.setBezeled_(False)
+        self.title_label.setDrawsBackground_(False)
+        self.title_label.setEditable_(False)
+        self.title_label.setSelectable_(False)
+        self.title_label.setAlignment_(NSCenterTextAlignment)
+        bold_font = NSFont.boldSystemFontOfSize_(28)
+        self.title_label.setFont_(bold_font)
+        self.panel.contentView().addSubview_(self.title_label)
+
+        y -= 50
+
+        # Version
+        self.version_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 18, content_width, 18)
+        )
+        self.version_label.setStringValue_(f"Version {VERSION}")
+        self.version_label.setBezeled_(False)
+        self.version_label.setDrawsBackground_(False)
+        self.version_label.setEditable_(False)
+        self.version_label.setSelectable_(False)
+        self.version_label.setAlignment_(NSCenterTextAlignment)
+        self.panel.contentView().addSubview_(self.version_label)
+
+        y -= 30
+
+        # Description
+        self.desc_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 32, content_width, 32)
+        )
+        self.desc_label.setStringValue_("Voice conversion application built on RVC\n(Retrieval-Based Voice Conversion)")
+        self.desc_label.setBezeled_(False)
+        self.desc_label.setDrawsBackground_(False)
+        self.desc_label.setEditable_(False)
+        self.desc_label.setSelectable_(False)
+        self.desc_label.setAlignment_(NSCenterTextAlignment)
+        self.panel.contentView().addSubview_(self.desc_label)
+
+        y -= 40
+
+        # Copyright
+        self.copyright_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 16, content_width, 16)
+        )
+        self.copyright_label.setStringValue_("© 2026 Frédéric Guigand")
+        self.copyright_label.setBezeled_(False)
+        self.copyright_label.setDrawsBackground_(False)
+        self.copyright_label.setEditable_(False)
+        self.copyright_label.setSelectable_(False)
+        self.copyright_label.setAlignment_(NSCenterTextAlignment)
+        self.panel.contentView().addSubview_(self.copyright_label)
+
+        y -= 25
+
+        # GitHub link button
+        self.github_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 24, content_width, 24)
+        )
+        self.github_btn.setTitle_("github.com/froggeric/applio-macOS-native-app")
+        self.github_btn.setBezelStyle_(NSButtonBezelStyleRounded)
+        self.github_btn.setAction_("openGithub:")
+        self.github_btn.setTarget_(self)
+        self.panel.contentView().addSubview_(self.github_btn)
+
+        y -= 35
+
+        # Check for Updates button
+        self.update_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(110, y - 28, 160, 28)
+        )
+        self.update_btn.setTitle_("Check for Updates")
+        self.update_btn.setBezelStyle_(NSButtonBezelStyleRounded)
+        self.update_btn.setAction_("checkUpdates:")
+        self.update_btn.setTarget_(self)
+        self.panel.contentView().addSubview_(self.update_btn)
+
+    def openGithub_(self, sender):
+        """Open GitHub repository in browser."""
+        import subprocess
+        subprocess.Popen(['open', RELEASES_URL])
+
+    def checkUpdates_(self, sender):
+        """Check for updates."""
+        self.panel.close()
+        check_for_updates()
+
+    def show(self):
+        """Display the panel."""
+        self.panel.makeKeyAndOrderFront_(None)
+
 
 def show_about_dialog():
-    """Display the About Applio dialog in a webview window."""
-    global _about_window
+    """Display native About Applio dialog."""
     logging.info("[About Menu] show_about_dialog() called")
 
-    # Read the about HTML template
-    about_html_path = os.path.join(BASE_PATH, "assets", "about.html")
-    logging.info(f"[About Menu] Loading HTML from: {about_html_path}")
-    try:
-        with open(about_html_path, 'r', encoding='utf-8') as f:
-            about_html = f.read()
-        logging.info(f"[About Menu] HTML loaded successfully ({len(about_html)} bytes)")
-    except Exception as e:
-        logging.error(f"Failed to load about.html: {e}")
+    if not NATIVE_APIS_AVAILABLE:
+        logging.warning("[About Menu] Native APIs not available")
         return
 
-    # Replace version placeholder with actual version
-    about_html = about_html.replace("{{APPLIO_VERSION}}", f"v{VERSION}")
-    logging.info(f"[About Menu] Version placeholder replaced with: v{VERSION}")
-
-    # Create API class for JavaScript callbacks
-    class AboutApi:
-        def open_repo_link(self):
-            """Open the GitHub repository in the default browser."""
-            import subprocess
-            subprocess.Popen(['open', RELEASES_URL])
-
-        def check_for_updates(self):
-            """Check for updates from the About dialog."""
-            check_for_updates()
-
-    # Create the about window
-    logging.info("[About Menu] Creating webview window...")
-    try:
-        _about_window = webview.create_window(
-            "About Applio",
-            html=about_html,
-            width=400,
-            height=300,
-            resizable=False,
-            min_size=(400, 300),
-            max_size=(400, 300),
-            js_api=AboutApi()
-        )
-        logging.info(f"[About Menu] Window created successfully: {_about_window}")
-    except Exception as e:
-        logging.error(f"[About Menu] Failed to create about window: {e}")
-        import traceback
-        logging.error(f"[About Menu] Traceback: {traceback.format_exc()}")
+    about_controller = AboutWindowController()
+    about_controller.show()
 
 # =================================================================
 # Menu Callback Wrappers
