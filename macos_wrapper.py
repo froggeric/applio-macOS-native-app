@@ -69,7 +69,20 @@ else:
 # Version format: {APPLIO_VERSION}.{BUILD_NUMBER}
 # Must match build_macos.py VERSION
 
-VERSION = "3.6.0.2"
+def _get_applio_version():
+    """Read version from assets/config.json (same as build_macos.py)."""
+    import json
+    config_path = os.path.join(BASE_PATH, "assets", "config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            return config.get("version", "3.6.2")
+    except Exception:
+        return "3.6.2"
+
+BUILD_NUMBER = 3  # Must match build_macos.py BUILD_NUMBER
+APPLIO_VERSION = _get_applio_version()
+VERSION = f"{APPLIO_VERSION}.{BUILD_NUMBER}"
 GITHUB_REPO = "froggeric/applio-macOS-native-app"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
