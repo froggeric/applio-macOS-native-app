@@ -142,6 +142,7 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 **Subprocess Environment Variables:**
 - macOS uses "spawn" not "fork" - subprocesses DON'T inherit parent's env vars
 - `macos_wrapper.py` must set `APPLIO_DATA_PATH`, `APPLIO_LOGS_PATH` BEFORE `runpy.run_path()`
+- File-based config at `~/Library/Application Support/Applio/runtime_paths.json` provides process-safe path resolution
 - See `DEBUGGING_HISTORY.md` for full investigation of this issue
 
 **Build outputs:**
@@ -151,9 +152,11 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 **Debugging Frozen Apps:**
 - Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
 - Check `DEBUGGING_HISTORY.md` for documented debugging sessions and solutions
+- All fixes must go through `patches/` - NEVER modify upstream files directly
 - When stuck after 3+ fix attempts: STOP and question the architecture (per systematic-debugging skill)
 
 **Build process gotchas:**
+- Patches in `patches/` are applied to source files before PyInstaller, then source files are restored to pristine state
 - PyInstaller cleans `dist/` at start - never delete while builds running
 - Build size: ~850MB (~2GB downloads on first launch)
 - Signing requires handling broken symlinks (use `path.exists()` before `rglob`)
