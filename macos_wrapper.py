@@ -325,7 +325,11 @@ def show_close_confirmation_dialog():
 
 
 class ProgressWindowController:
-    """Native macOS progress monitoring window."""
+    """Native macOS progress monitoring window.
+
+    Uses a closure-based approach for window close handling since
+    we're a plain Python class, not an NSObject.
+    """
 
     def __init__(self, process_type, process_info):
         from AppKit import (
@@ -350,7 +354,8 @@ class ProgressWindowController:
         )
         self.window.setTitle_(f"Applio - {process_type.capitalize()}")
         self.window.center()
-        self.window.setDelegate_(self)
+        # Note: We don't set a delegate because this is not an NSObject.
+        # Window close is handled by the caller checking if window is visible.
 
         # Build UI elements
         y = 260  # Start from top
@@ -557,7 +562,11 @@ class ProgressWindowController:
 
     def show(self):
         """Display the window."""
+        # Simply show the window - no delegate or notification needed.
+        # If user closes window manually, they can use Terminate button
+        # or the process continues in background.
         self.window.makeKeyAndOrderFront_(None)
+        logging.info("[ProgressWindow] Window displayed successfully")
 
 
 def show_progress_window():
