@@ -667,7 +667,8 @@ print("\nStarting PyInstaller build...")
 PyInstaller.__main__.run(pyinstaller_args)
 
 # Write build_info.json for runtime version reading
-build_info_path = os.path.join("dist", APP_NAME, "Contents", "Resources", "build_info.json")
+build_info_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Resources", "build_info.json")
+os.makedirs(os.path.dirname(build_info_path), exist_ok=True)
 with open(build_info_path, "w", encoding="utf-8") as f:
     json.dump({
         "version": APPLIO_VERSION,
