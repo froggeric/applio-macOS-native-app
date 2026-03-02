@@ -78,7 +78,7 @@ IDEMPOTENCY_MARKER = "# === Process Tracking (injected by patch) ==="
 
 def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
     """
-    Patch run_preprocess_script to track subprocess.
+    Patch run_preprocess_script to track subprocess and redirect output to log file.
 
     Line 448: subprocess.run(command)
     """
@@ -93,10 +93,15 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
         print("[patch_process_tracking] preprocess pattern not found")
         return content, False
 
-    replacement = r'''\1# Track preprocess process
-\1_proc = subprocess.Popen(command)
-\1_track_process("preprocess", _proc.pid, model_name=model_name)
+    replacement = r'''\1# Track preprocess process with log redirection
+\1_log_dir = os.path.join(logs_path, model_name)
+\1os.makedirs(_log_dir, exist_ok=True)
+\1_log_file_path = os.path.join(_log_dir, "preprocess.log")
+\1_log_file = open(_log_file_path, "w")
+\1_proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
+\1_track_process("preprocess", _proc.pid, model_name=model_name, log_file=_log_file_path)
 \1_proc.wait()
+\1_log_file.close()
 \1_untrack_process("preprocess")
 \1if _proc.returncode != 0:
 \1    return f"Error: Preprocessing failed with code {_proc.returncode}"
@@ -108,7 +113,7 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
 
 def patch_run_extract_script(content: str) -> tuple[str, bool]:
     """
-    Patch run_extract_script to track subprocess.
+    Patch run_extract_script to track subprocess and redirect output to log file.
 
     Line 485: subprocess.run(command_1)
     """
@@ -123,10 +128,15 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
         print("[patch_process_tracking] extract pattern not found")
         return content, False
 
-    replacement = r'''\1# Track extract process
-\1_proc = subprocess.Popen(command_1)
-\1_track_process("extract", _proc.pid, model_name=model_name)
+    replacement = r'''\1# Track extract process with log redirection
+\1_log_dir = os.path.join(logs_path, model_name)
+\1os.makedirs(_log_dir, exist_ok=True)
+\1_log_file_path = os.path.join(_log_dir, "extract.log")
+\1_log_file = open(_log_file_path, "w")
+\1_proc = subprocess.Popen(command_1, stdout=_log_file, stderr=subprocess.STDOUT)
+\1_track_process("extract", _proc.pid, model_name=model_name, log_file=_log_file_path)
 \1_proc.wait()
+\1_log_file.close()
 \1_untrack_process("extract")
 \1if _proc.returncode != 0:
 \1    return f"Error: Feature extraction failed with code {_proc.returncode}"
@@ -139,7 +149,7 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
 
 def patch_run_train_script(content: str) -> tuple[str, bool]:
     """
-    Patch run_train_script to track subprocess.
+    Patch run_train_script to track subprocess and redirect output to log file.
 
     Line 553: subprocess.run(command)
     """
@@ -154,10 +164,15 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
         print("[patch_process_tracking] train pattern not found")
         return content, False
 
-    replacement = r'''\1# Track training process
-\1_proc = subprocess.Popen(command)
-\1_track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch)
+    replacement = r'''\1# Track training process with log redirection
+\1_log_dir = os.path.join(logs_path, model_name)
+\1os.makedirs(_log_dir, exist_ok=True)
+\1_log_file_path = os.path.join(_log_dir, "training.log")
+\1_log_file = open(_log_file_path, "w")
+\1_proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
+\1_track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch, log_file=_log_file_path)
 \1_proc.wait()
+\1_log_file.close()
 \1_untrack_process("training")
 \1if _proc.returncode != 0:
 \1    return f"Error: Training failed with code {_proc.returncode}"
