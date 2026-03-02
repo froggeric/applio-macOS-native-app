@@ -666,6 +666,16 @@ patched_files = pre_build_patch()
 print("\nStarting PyInstaller build...")
 PyInstaller.__main__.run(pyinstaller_args)
 
+# Write build_info.json for runtime version reading
+build_info_path = os.path.join("dist", APP_NAME, "Contents", "Resources", "build_info.json")
+with open(build_info_path, "w", encoding="utf-8") as f:
+    json.dump({
+        "version": APPLIO_VERSION,
+        "build_number": BUILD_NUMBER,
+        "full_version": VERSION
+    }, f)
+print(f"  Wrote build_info.json: version={VERSION}")
+
 # RESTORE SOURCE FILES AFTER BUILD
 post_build_restore(patched_files)
 
