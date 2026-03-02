@@ -38,9 +38,31 @@ try:
         NSTextView, NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
         NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
+        NSAccessibilityAnnouncementNotification,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
+
+    def _announce_for_accessibility(element, message):
+        """Post an accessibility announcement for VoiceOver users."""
+        try:
+            NSAccessibilityPostNotification(element, NSAccessibilityAnnouncementNotification, message)
+        except Exception:
+            pass  # Silently fail if accessibility not available
+
+    # Try to import NSAccessibilityPostNotification
+    try:
+        from AppKit import NSAccessibilityPostNotification
+    except ImportError:
+        # Fallback for older PyObjC versions
+        def _announce_for_accessibility(element, message):
+            try:
+                NSNotificationCenter.defaultCenter().postNotificationName_object_userInfo_(
+                    "AXAnnouncementRequested", element, {"AXAnnouncementKey": message}
+                )
+            except Exception:
+                pass
+
     NATIVE_APIS_AVAILABLE = True
 except ImportError:
     NATIVE_APIS_AVAILABLE = False
@@ -218,20 +240,28 @@ class ProgressWindowController:
         )
 
     def _create_ui(self):
-        """Create UI elements."""
+        """Create UI elements with accessibility support."""
         window_width = 500
         padding = 15
         y = 500 - padding
+
+        # Set window accessibility
+        self.window.setAccessibilityLabel_(f"Applio {self.process_type.capitalize()} Progress")
+        self.window.setAccessibilityHelp_(f"Monitoring window for {self.process_type} process")
 
         # Process type label (bold, larger)
         self.type_label = NSTextField.alloc().initWithFrame_(
             NSMakeRect(padding, y - 24, window_width - 2*padding, 24)
         )
-        self.type_label.setStringValue_(f"{self.process_type.capitalize()}: {self.process_info.get('model_name', 'Unknown')}")
+        model_name = self.process_info.get('model_name', 'Unknown')
+        self.type_label.setStringValue_(f"{self.process_type.capitalize()}: {model_name}")
         self.type_label.setBezeled_(False)
         self.type_label.setDrawsBackground_(False)
         self.type_label.setEditable_(False)
         self.type_label.setFont_(NSFont.boldSystemFontOfSize_(16))
+        # Accessibility
+        self.type_label.setAccessibilityLabel_(f"{self.process_type.capitalize()} process for model {model_name}")
+        self.type_label.setAccessibilityIdentifier_("process_type_label")
         self.window.contentView().addSubview_(self.type_label)
         y -= 30
 
@@ -243,6 +273,10 @@ class ProgressWindowController:
         self.status_label.setBezeled_(False)
         self.status_label.setDrawsBackground_(False)
         self.status_label.setEditable_(False)
+        # Accessibility
+        self.status_label.setAccessibilityLabel_("Process status")
+        self.status_label.setAccessibilityHelp_("Current status of the process: Running, Paused, Completed, or Terminated")
+        self.status_label.setAccessibilityIdentifier_("status_label")
         self.window.contentView().addSubview_(self.status_label)
         y -= 25
 
@@ -254,6 +288,10 @@ class ProgressWindowController:
         self.time_label.setBezeled_(False)
         self.time_label.setDrawsBackground_(False)
         self.time_label.setEditable_(False)
+        # Accessibility
+        self.time_label.setAccessibilityLabel_("Elapsed time")
+        self.time_label.setAccessibilityHelp_("Time elapsed since the process started")
+        self.time_label.setAccessibilityIdentifier_("elapsed_time_label")
         self.window.contentView().addSubview_(self.time_label)
         y -= 25
 
@@ -263,6 +301,10 @@ class ProgressWindowController:
         )
         self.progress_bar.setIndeterminate_(True)
         self.progress_bar.startAnimation_(None)
+        # Accessibility
+        self.progress_bar.setAccessibilityLabel_("Progress indicator")
+        self.progress_bar.setAccessibilityHelp_("Shows that the process is actively running")
+        self.progress_bar.setAccessibilityIdentifier_("progress_bar")
         self.window.contentView().addSubview_(self.progress_bar)
         y -= 30
 
@@ -273,6 +315,10 @@ class ProgressWindowController:
         )
         self.log_scroll.setHasVerticalScroller_(True)
         self.log_scroll.setBorderType_(NSBezelBorder)
+        # Accessibility
+        self.log_scroll.setAccessibilityLabel_("Log output")
+        self.log_scroll.setAccessibilityHelp_("Real-time log output from the training process")
+        self.log_scroll.setAccessibilityIdentifier_("log_scroll_view")
 
         self.log_view = NSTextView.alloc().initWithFrame_(
             NSMakeRect(0, 0, window_width - 2*padding - 20, log_height)
@@ -280,6 +326,9 @@ class ProgressWindowController:
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.systemFontOfSize_(11))
         self.log_view.setString_("Waiting for log output...")
+        # Accessibility
+        self.log_view.setAccessibilityLabel_("Log text")
+        self.log_view.setAccessibilityIdentifier_("log_text_view")
         self.log_scroll.setDocumentView_(self.log_view)
         self.window.contentView().addSubview_(self.log_scroll)
         y -= log_height + padding
@@ -296,6 +345,10 @@ class ProgressWindowController:
         self.terminate_btn.setTitle_("Terminate")
         self.terminate_btn.setTarget_(self)
         self.terminate_btn.setAction_("terminateProcess:")
+        # Accessibility
+        self.terminate_btn.setAccessibilityLabel_("Terminate process")
+        self.terminate_btn.setAccessibilityHelp_("Stop the process immediately. The process will not complete its current task.")
+        self.terminate_btn.setAccessibilityIdentifier_("terminate_button")
         self.window.contentView().addSubview_(self.terminate_btn)
 
         # Pause/Resume button (center-left)
@@ -305,6 +358,10 @@ class ProgressWindowController:
         self.pause_btn.setTitle_("Pause")
         self.pause_btn.setTarget_(self)
         self.pause_btn.setAction_("togglePause:")
+        # Accessibility
+        self.pause_btn.setAccessibilityLabel_("Pause or resume process")
+        self.pause_btn.setAccessibilityHelp_("Temporarily pause the process or resume a paused process")
+        self.pause_btn.setAccessibilityIdentifier_("pause_button")
         self.window.contentView().addSubview_(self.pause_btn)
 
         # Open Logs button (center-right)
@@ -314,6 +371,10 @@ class ProgressWindowController:
         self.logs_btn.setTitle_("Open Logs")
         self.logs_btn.setTarget_(self)
         self.logs_btn.setAction_("openLogsFolder:")
+        # Accessibility
+        self.logs_btn.setAccessibilityLabel_("Open logs folder")
+        self.logs_btn.setAccessibilityHelp_("Open the folder containing log files in Finder")
+        self.logs_btn.setAccessibilityIdentifier_("open_logs_button")
         self.window.contentView().addSubview_(self.logs_btn)
 
         # Relaunch button (right)
@@ -323,6 +384,10 @@ class ProgressWindowController:
         self.relaunch_btn.setTitle_("Relaunch App")
         self.relaunch_btn.setTarget_(self)
         self.relaunch_btn.setAction_("relaunchApp:")
+        # Accessibility
+        self.relaunch_btn.setAccessibilityLabel_("Relaunch application")
+        self.relaunch_btn.setAccessibilityHelp_("Open a new instance of Applio while this process continues in the background")
+        self.relaunch_btn.setAccessibilityIdentifier_("relaunch_button")
         self.window.contentView().addSubview_(self.relaunch_btn)
 
         # Start elapsed time timer
@@ -349,8 +414,12 @@ class ProgressWindowController:
         import psutil
         pid = self.process_info.get("pid")
         if pid and not psutil.pid_exists(pid):
-            self.status_label.setStringValue_("Status: Completed")
-            self.progress_bar.stopAnimation_(None)
+            current_status = self.status_label.stringValue()
+            if "Running" in current_status or "Paused" in current_status:
+                self.status_label.setStringValue_("Status: Completed")
+                self.progress_bar.stopAnimation_(None)
+                # Accessibility announcement for completion
+                _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process completed")
 
     def pollLogFile_(self, timer):
         """Poll log file for new content."""
@@ -360,7 +429,7 @@ class ProgressWindowController:
         try:
             current_size = os.path.getsize(self.log_file_path)
             if current_size > self._last_file_size:
-                with open(self.log_file_path, "r") as f:
+                with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
                     f.seek(self._last_file_pos)
                     new_content = f.read()
                     self._last_file_pos = f.tell()
@@ -388,7 +457,7 @@ class ProgressWindowController:
         # Initial log read
         if self.log_file_path and os.path.exists(self.log_file_path):
             try:
-                with open(self.log_file_path, "r") as f:
+                with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
                     self._last_file_pos = f.tell()
                     self._last_file_size = os.path.getsize(self.log_file_path)
@@ -405,6 +474,13 @@ class ProgressWindowController:
             psutil.Process(pid).terminate()
             self.status_label.setStringValue_("Status: Terminated")
             self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process terminated by user")
+            # Accessibility announcement
+            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process terminated")
+            # Update button accessibility
+            self.terminate_btn.setEnabled_(False)
+            self.terminate_btn.setAccessibilityHelp_("Process has been terminated")
+            self.pause_btn.setEnabled_(False)
+            self.pause_btn.setAccessibilityHelp_("Process has been terminated")
 
     def togglePause_(self, sender):
         """Toggle pause/resume."""
@@ -416,13 +492,19 @@ class ProgressWindowController:
         if self.paused:
             os.kill(pid, signal.SIGCONT)
             self.pause_btn.setTitle_("Pause")
+            self.pause_btn.setAccessibilityLabel_("Pause process")
             self.status_label.setStringValue_("Status: Running")
             self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process resumed")
+            # Accessibility announcement
+            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process resumed")
         else:
             os.kill(pid, signal.SIGSTOP)
             self.pause_btn.setTitle_("Resume")
+            self.pause_btn.setAccessibilityLabel_("Resume process")
             self.status_label.setStringValue_("Status: Paused")
             self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process paused")
+            # Accessibility announcement
+            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process paused")
         self.paused = not self.paused
 
     def openLogsFolder_(self, sender):
@@ -602,12 +684,14 @@ class ApplioLauncher:
         about_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "About Applio", "showAbout:", ""
         )
+        about_item.setAccessibilityHelp_("Show information about Applio version and credits")
         app_menu.addItem_(about_item)
 
         # Check for Updates...
         update_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Check for Updates...", "checkUpdates:", ""
         )
+        update_item.setAccessibilityHelp_("Open the releases page to check for new versions")
         app_menu.addItem_(update_item)
 
         app_menu.addItem_(NSMenuItem.separatorItem())
@@ -616,6 +700,7 @@ class ApplioLauncher:
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Quit Applio", "terminate:", "q"
         )
+        quit_item.setAccessibilityHelp_("Exit Applio (Command Q)")
         app_menu.addItem_(quit_item)
 
         # =====================================================================
@@ -631,6 +716,7 @@ class ApplioLauncher:
         data_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Set Data Location...", "setDataLocation:", ""
         )
+        data_item.setAccessibilityHelp_("Choose a folder to store Applio data including models and training files")
         file_menu.addItem_(data_item)
 
         # =====================================================================
@@ -647,6 +733,7 @@ class ApplioLauncher:
             "Progress Monitor", "showProgressMonitor:", "m"
         )
         self.progress_menu_item.setEnabled_(False)
+        self.progress_menu_item.setAccessibilityHelp_("Open the progress monitoring window for active training or inference processes")
         window_menu.addItem_(self.progress_menu_item)
 
         window_menu.addItem_(NSMenuItem.separatorItem())
@@ -657,12 +744,14 @@ class ApplioLauncher:
         )
         # Cmd+Shift+W modifier
         main_window_item.setKeyEquivalentModifierMask_(1048576 | 131072)  # Command | Shift
+        main_window_item.setAccessibilityHelp_("Bring the main Applio window to front (Command Shift W)")
         window_menu.addItem_(main_window_item)
 
         # Minimize (Cmd+M would conflict, use no shortcut or different)
         minimize_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Minimize", "performMiniaturize:", ""
         )
+        minimize_item.setAccessibilityHelp_("Minimize the current window")
         window_menu.addItem_(minimize_item)
 
         # Set the menu
@@ -743,6 +832,8 @@ class ApplioLauncher:
         )
         alert.setAlertStyle_(NSAlertStyleInformational)
         alert.addButtonWithTitle_("OK")
+        # Accessibility - NSAlert is already accessible, but add help text
+        alert.setAccessibilityHelp_("About Applio dialog showing version and copyright information")
         alert.runModal()
 
     def checkUpdates_(self, sender):
