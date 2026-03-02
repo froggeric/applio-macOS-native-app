@@ -159,11 +159,14 @@ def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
 \1os.makedirs(_log_dir, exist_ok=True)
 \1_log_file_path = os.path.join(_log_dir, "preprocess.log")
 \1_log_file = open(_log_file_path, "w")
-\1_proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-\1_track_process("preprocess", _proc.pid, model_name=model_name, log_file=_log_file_path)
-\1_proc.wait()
-\1_log_file.close()
-\1_untrack_process("preprocess")
+\1try:
+\1    _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
+\1    _track_process("preprocess", _proc.pid, model_name=model_name, log_file=_log_file_path)
+\1    _proc.wait()
+\1    _update_process_status("preprocess", "completed")
+\1finally:
+\1    _log_file.close()
+\1    _untrack_process("preprocess")
 \1if _proc.returncode != 0:
 \1    return f"Error: Preprocessing failed with code {_proc.returncode}"
 \3\4'''
@@ -194,11 +197,14 @@ def patch_run_extract_script(content: str) -> tuple[str, bool]:
 \1os.makedirs(_log_dir, exist_ok=True)
 \1_log_file_path = os.path.join(_log_dir, "extract.log")
 \1_log_file = open(_log_file_path, "w")
-\1_proc = subprocess.Popen(command_1, stdout=_log_file, stderr=subprocess.STDOUT)
-\1_track_process("extract", _proc.pid, model_name=model_name, log_file=_log_file_path)
-\1_proc.wait()
-\1_log_file.close()
-\1_untrack_process("extract")
+\1try:
+\1    _proc = subprocess.Popen(command_1, stdout=_log_file, stderr=subprocess.STDOUT)
+\1    _track_process("extract", _proc.pid, model_name=model_name, log_file=_log_file_path)
+\1    _proc.wait()
+\1    _update_process_status("extract", "completed")
+\1finally:
+\1    _log_file.close()
+\1    _untrack_process("extract")
 \1if _proc.returncode != 0:
 \1    return f"Error: Feature extraction failed with code {_proc.returncode}"
 
@@ -230,11 +236,14 @@ def patch_run_train_script(content: str) -> tuple[str, bool]:
 \1os.makedirs(_log_dir, exist_ok=True)
 \1_log_file_path = os.path.join(_log_dir, "training.log")
 \1_log_file = open(_log_file_path, "w")
-\1_proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-\1_track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch, log_file=_log_file_path)
-\1_proc.wait()
-\1_log_file.close()
-\1_untrack_process("training")
+\1try:
+\1    _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
+\1    _track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch, log_file=_log_file_path)
+\1    _proc.wait()
+\1    _update_process_status("training", "completed")
+\1finally:
+\1    _log_file.close()
+\1    _untrack_process("training")
 \1if _proc.returncode != 0:
 \1    return f"Error: Training failed with code {_proc.returncode}"
 \3\4

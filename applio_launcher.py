@@ -42,6 +42,7 @@ try:
         NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
         NSAccessibilityAnnouncementNotification,
+        NSCommandKeyMask, NSShiftKeyMask,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
@@ -462,8 +463,10 @@ class ProgressWindowController:
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.systemFontOfSize_(11))
         self.log_view.setString_("Waiting for log output...")
-        # Accessibility
-        self.log_view.setAccessibilityLabel_("Log text")
+        # Accessibility - enable explicitly and set attributes
+        self.log_view.setAccessibilityEnabled_(True)
+        self.log_view.setAccessibilityLabel_("Log output")
+        self.log_view.setAccessibilityHelp_("Training and processing log messages")
         self.log_view.setAccessibilityIdentifier_("log_text_view")
         self.log_scroll.setDocumentView_(self.log_view)
         self.window.contentView().addSubview_(self.log_scroll)
@@ -611,11 +614,30 @@ class ProgressWindowController:
                 )
 
     def _add_log_line(self, line):
-        """Add a line to the log view (deque auto-trims to maxlen)."""
+        """Add a line to the log view using incremental text storage update."""
         self.log_lines.append(line)
-        self.log_view.setString_("\n".join(self.log_lines))
-        # Scroll to bottom
-        self.log_scroll.reflectScrolledClipView_(self.log_scroll.contentView())
+
+        # Use textStorage for incremental updates (better for VoiceOver)
+        # This appends to the end instead of replacing entire content
+        text_storage = self.log_view.textStorage()
+        current_length = text_storage.length()
+
+        # Add newline if not first line
+        if current_length > 0 and not text_storage.string().endswith("\n"):
+            text_storage.replaceCharactersInRange_withString_(
+                (current_length, 0), "\n"
+            )
+            current_length += 1
+
+        # Append new line
+        text_storage.replaceCharactersInRange_withString_(
+            (current_length, 0), line
+        )
+
+        # Scroll to bottom using proper method
+        self.log_view.scrollRangeToVisible_(
+            (text_storage.length(), 0)
+        )
 
     def show(self):
         """Show the window and start log tailing."""
@@ -905,9 +927,13 @@ class ApplioLauncher:
         window_item.setSubmenu_(window_menu)
         main_menu.addItem_(window_item)
 
-        # Progress Monitor (Cmd+M) - enabled only when processes active
+        # Progress Monitor (Cmd+Shift+P) - enabled only when processes active
+        # Note: Using Cmd+Shift+P to avoid conflict with system Cmd+M (Minimize)
         self.progress_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Progress Monitor", "showProgressMonitor:", "m"
+            "Progress Monitor", "showProgressMonitor:", "P"
+        )
+        self.progress_menu_item.setKeyEquivalentModifierMask_(
+            NSCommandKeyMask | NSShiftKeyMask
         )
         self.progress_menu_item.setEnabled_(False)
         self.progress_menu_item.setAccessibilityHelp_("Open the progress monitoring window for active training or inference processes")
@@ -1099,6 +1125,13 @@ class ApplioLauncher:
         if not processes:
             return
 
+        # Clean up existing progress window before creating new one
+        if self.progress_window:
+            self.progress_window._cleanup()
+            if self.progress_window.window:
+                self.progress_window.window.close()
+            self.progress_window = None
+
         proc = processes[0]
         self.progress_window = ProgressWindowController(
             proc["type"],
@@ -1112,6 +1145,11 @@ class ApplioLauncher:
         if self._menu_update_timer:
             self._menu_update_timer.invalidate()
             self._menu_update_timer = None
+
+        # Clean up progress window (invalidates its timer and observer)
+        if self.progress_window:
+            self.progress_window._cleanup()
+            self.progress_window = None
 
         # Terminate wrapper process
         if self.wrapper_process and self.wrapper_process.poll() is None:
