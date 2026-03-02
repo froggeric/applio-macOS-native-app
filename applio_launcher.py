@@ -61,14 +61,22 @@ else:
 # 2. Subprocess Mode Detection (MUST BE BEFORE LOGGING)
 # =================================================================
 # In PyInstaller frozen apps, sys.executable points to this launcher.
-# When we spawn macos_wrapper.py via subprocess.Popen([sys.executable, "macos_wrapper.py"]),
-# this launcher is re-executed with macos_wrapper.py as argv[1].
-# We detect this and delegate to the wrapper.
+# When subprocesses are spawned via subprocess.Popen([sys.executable, "script.py"]),
+# this launcher is re-executed with the script path as argv[1].
+# We detect this and delegate to the script via runpy.
+#
+# This handles:
+# - macos_wrapper.py (spawner for Gradio UI)
+# - rvc/train/train.py (training)
+# - rvc/train/preprocess/preprocess.py (preprocessing)
+# - rvc/train/extract/extract.py (feature extraction)
+# - Any other Python scripts spawned by core.py
 
 if len(sys.argv) > 1:
     potential_script = sys.argv[1]
-    if potential_script.endswith('macos_wrapper.py'):
-        # Find the wrapper script
+    # Accept any .py script, not just macos_wrapper.py
+    if potential_script.endswith('.py') and not potential_script.startswith('-'):
+        # Find the script - check both absolute path and relative to BASE_PATH
         script_path = None
         if os.path.exists(potential_script):
             script_path = potential_script
@@ -76,7 +84,7 @@ if len(sys.argv) > 1:
             script_path = os.path.join(BASE_PATH, potential_script)
 
         if script_path:
-            # Delegate to wrapper via runpy
+            # Delegate to script via runpy
             import runpy
             sys.argv = [script_path] + sys.argv[2:]
             runpy.run_path(script_path, run_name="__main__")
