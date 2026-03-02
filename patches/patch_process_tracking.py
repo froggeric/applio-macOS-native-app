@@ -18,8 +18,11 @@ PROCESS_TRACKER_IMPORT = '''
 # === Process Tracking (injected by patch) ===
 import json
 import datetime
+import fcntl
+import time as _time_module
 
 _PROCESS_STATE_FILE = None
+_PROCESS_LOCK_TIMEOUT = 5.0
 
 def _get_process_state_path():
     global _PROCESS_STATE_FILE
@@ -28,23 +31,79 @@ def _get_process_state_path():
         _PROCESS_STATE_FILE = os.path.join(data_path, ".applio", "active_processes.json")
     return _PROCESS_STATE_FILE
 
+def _acquire_file_lock(lock_file, timeout=_PROCESS_LOCK_TIMEOUT):
+    """Acquire exclusive file lock with timeout."""
+    start_time = _time_module.time()
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (IOError, OSError):
+            if _time_module.time() - start_time > timeout:
+                return False
+            _time_module.sleep(0.05)
+
+def _release_file_lock(lock_file):
+    """Release file lock."""
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except (IOError, OSError):
+        pass
+
 def _read_process_state():
     path = _get_process_state_path()
     if not os.path.exists(path):
         return {"version": 1, "processes": {}}
+    lock_path = path + ".lock"
     try:
-        with open(path, "r") as f:
-            return json.load(f)
+        with open(lock_path, "w") as lock_file:
+            if not _acquire_file_lock(lock_file):
+                pass  # Proceed anyway
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            finally:
+                _release_file_lock(lock_file)
     except (json.JSONDecodeError, IOError):
         return {"version": 1, "processes": {}}
 
 def _write_process_state(state):
     path = _get_process_state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temp = path + ".tmp"
-    with open(temp, "w") as f:
-        json.dump(state, f, indent=2)
-    os.rename(temp, path)
+    lock_path = path + ".lock"
+    try:
+        with open(lock_path, "w") as lock_file:
+            if not _acquire_file_lock(lock_file):
+                pass  # Proceed anyway
+            try:
+                temp = path + ".tmp"
+                with open(temp, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                os.rename(temp, path)
+            finally:
+                _release_file_lock(lock_file)
+    except IOError as e:
+        print(f"[ProcessTracking] Error saving state: {e}")
+
+def _verify_process_identity(pid, expected_start_time=None):
+    """Verify a process is still the same one we started (protects against PID recycling)."""
+    if not pid:
+        return False
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        if expected_start_time:
+            if isinstance(expected_start_time, str):
+                expected = datetime.datetime.fromisoformat(expected_start_time)
+            else:
+                expected = expected_start_time
+            actual = datetime.datetime.fromtimestamp(proc.create_time())
+            delta = abs((actual - expected).total_seconds())
+            if delta > 2.0:
+                return False
+        return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 def _track_process(process_type, pid, **metadata):
     state = _read_process_state()

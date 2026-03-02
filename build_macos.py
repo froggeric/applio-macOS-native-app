@@ -542,18 +542,28 @@ def pre_build_patch():
 
     We must patch source files before PyInstaller runs, then restore them
     afterward to keep the repo clean.
+
+    CRITICAL: Patch order matters! Some patches must run before others.
+    - patch_process_tracking.py MUST run before patch_subprocess_validation.py
+      (tracking transforms subprocess.run to Popen, validation expects run pattern)
     """
     print("\n" + "=" * 60)
     print("PRE-BUILD: Patching source files")
     print("=" * 60)
 
+    # Patch dependencies: patch_name -> list of patches that must run BEFORE it
+    PATCH_DEPENDENCIES = {
+        "patches/patch_subprocess_validation.py": ["patches/patch_process_tracking.py"],
+    }
+
     # Patches to apply: (patcher_path, source_file, description, patcher_type)
     # patcher_type: "dir" = pass directory to patcher, "file" = pass full file path
+    # IMPORTANT: Order matters! Process tracking MUST come before subprocess validation.
     patches_to_apply = [
         # Directory-based patchers (pass dirname)
         ("patches/patch_data_paths.py", "core.py", "core.py - file-based path resolution", "dir"),
         ("patches/patch_preflight_validation.py", "core.py", "core.py - pre-flight dataset validation", "dir"),
-        ("patches/patch_process_tracking.py", "core.py", "core.py - process tracking for subprocesses", "dir"),
+        ("patches/patch_process_tracking.py", "core.py", "core.py - process tracking for subprocesses", "dir"),  # MUST be before subprocess_validation
         ("patches/patch_subprocess_validation.py", "core.py", "core.py - subprocess validation", "dir"),
         ("patches/patch_preprocess_warning.py", "core.py", "core.py - preprocess warning", "dir"),
         ("patches/patch_custom_pretrained_paths.py", "core.py", "core.py - custom pretrained path resolution", "dir"),
@@ -565,6 +575,20 @@ def pre_build_patch():
         ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
         ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
     ]
+
+    # Validate patch order matches dependencies
+    patch_names = [p[0] for p in patches_to_apply]
+    for patch_name, required_before in PATCH_DEPENDENCIES.items():
+        if patch_name in patch_names:
+            patch_idx = patch_names.index(patch_name)
+            for required in required_before:
+                if required in patch_names:
+                    required_idx = patch_names.index(required)
+                    if required_idx > patch_idx:
+                        print(f"  ERROR: Patch order violation!")
+                        print(f"    {required} must come before {patch_name}")
+                        print(f"    Current order: {required} at {required_idx}, {patch_name} at {patch_idx}")
+                        raise ValueError("Patch order violates dependencies. Fix the patches_to_apply order.")
 
     patched_files = {}  # Maps source_file -> original content
 

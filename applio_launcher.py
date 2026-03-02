@@ -28,6 +28,8 @@ import threading
 import json
 import logging
 import datetime
+import fcntl
+import time
 from pathlib import Path
 
 # macOS native APIs
@@ -129,8 +131,15 @@ logging.basicConfig(
 logging.info("[Launcher] Starting Applio Launcher")
 
 # =================================================================
-# 4. Process State Management
+# 4. Process State Management (with file locking)
 # =================================================================
+
+# Thread lock for in-memory state access
+_state_lock = threading.Lock()
+
+# File lock timeout in seconds
+FILE_LOCK_TIMEOUT = 5.0
+
 
 def get_process_state_path():
     """Get path to active_processes.json."""
@@ -138,30 +147,114 @@ def get_process_state_path():
     return os.path.join(data_path, ".applio", "active_processes.json")
 
 
+def _acquire_file_lock(lock_file, timeout=FILE_LOCK_TIMEOUT):
+    """Acquire exclusive file lock with timeout."""
+    start_time = time.time()
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (IOError, OSError):
+            if time.time() - start_time > timeout:
+                return False
+            time.sleep(0.05)
+
+
+def _release_file_lock(lock_file):
+    """Release file lock."""
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except (IOError, OSError):
+        pass
+
+
 def load_process_state():
-    """Load process state from file."""
+    """Load process state from file with locking."""
     path = get_process_state_path()
     if not os.path.exists(path):
         return {"version": 1, "processes": {}}
+
+    lock_path = path + ".lock"
     try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
+        with open(lock_path, "w") as lock_file:
+            if not _acquire_file_lock(lock_file):
+                logging.warning("[Launcher] Could not acquire lock for reading, proceeding anyway")
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            finally:
+                _release_file_lock(lock_file)
+    except (json.JSONDecodeError, IOError) as e:
+        logging.warning(f"[Launcher] Error reading process state: {e}")
         return {"version": 1, "processes": {}}
 
 
 def save_process_state(state):
-    """Save process state to file."""
+    """Save process state to file with locking."""
     path = get_process_state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temp = path + ".tmp"
-    with open(temp, "w") as f:
-        json.dump(state, f, indent=2)
-    os.rename(temp, path)
+
+    lock_path = path + ".lock"
+    try:
+        with open(lock_path, "w") as lock_file:
+            if not _acquire_file_lock(lock_file):
+                logging.warning("[Launcher] Could not acquire lock for writing, proceeding anyway")
+            try:
+                temp = path + ".tmp"
+                with open(temp, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                os.rename(temp, path)
+            finally:
+                _release_file_lock(lock_file)
+    except IOError as e:
+        logging.error(f"[Launcher] Error saving process state: {e}")
+
+
+def verify_process_identity(pid, expected_start_time=None):
+    """
+    Verify a process is still the same one we started.
+
+    PID recycling on macOS means a PID can be reassigned after a process dies.
+    We verify by checking that the process creation time matches what we expect.
+
+    Args:
+        pid: Process ID to verify
+        expected_start_time: ISO format datetime string or datetime object of when we started the process
+
+    Returns:
+        bool: True if process exists AND is the same process we started
+    """
+    import psutil
+
+    if not pid:
+        return False
+
+    try:
+        proc = psutil.Process(pid)
+
+        # If we have an expected start time, verify it matches
+        if expected_start_time:
+            if isinstance(expected_start_time, str):
+                expected = datetime.datetime.fromisoformat(expected_start_time)
+            else:
+                expected = expected_start_time
+
+            # Allow 2 second tolerance for timing differences
+            actual = datetime.datetime.fromtimestamp(proc.create_time())
+            delta = abs((actual - expected).total_seconds())
+
+            if delta > 2.0:
+                logging.warning(f"[Launcher] PID {pid} recycled (time delta: {delta}s)")
+                return False
+
+        return True
+
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
 def validate_process_state(state):
-    """Remove stale entries where process has died."""
+    """Remove stale entries where process has died (with PID recycling protection)."""
     import psutil
     cleaned = False
 
@@ -169,7 +262,10 @@ def validate_process_state(state):
         if info is None:
             continue
         pid = info.get("pid")
-        if pid and not psutil.pid_exists(pid):
+        started_at = info.get("started_at")
+
+        # Use identity verification instead of just pid_exists
+        if pid and not verify_process_identity(pid, started_at):
             logging.info(f"[Launcher] Cleaning stale entry: {process_type} PID {pid}")
             state["processes"][process_type] = None
             cleaned = True
@@ -178,14 +274,15 @@ def validate_process_state(state):
 
 
 def get_active_processes():
-    """Get list of active processes."""
-    state = load_process_state()
-    state, _ = validate_process_state(state)
-    return [
-        {"type": ptype, **info}
-        for ptype, info in state.get("processes", {}).items()
-        if info and info.get("status") == "running"
-    ]
+    """Get list of active processes (thread-safe)."""
+    with _state_lock:
+        state = load_process_state()
+        state, _ = validate_process_state(state)
+        return [
+            {"type": ptype, **info}
+            for ptype, info in state.get("processes", {}).items()
+            if info and info.get("status") == "running"
+        ]
 
 
 # =================================================================
@@ -410,10 +507,10 @@ class ProgressWindowController:
         # Also poll log file
         self.pollLogFile_(None)
 
-        # Check if process still running
-        import psutil
+        # Check if process still running (with PID recycling protection)
         pid = self.process_info.get("pid")
-        if pid and not psutil.pid_exists(pid):
+        started_at = self.process_info.get("started_at")
+        if pid and not verify_process_identity(pid, started_at):
             current_status = self.status_label.stringValue()
             if "Running" in current_status or "Paused" in current_status:
                 self.status_label.setStringValue_("Status: Completed")
@@ -468,44 +565,53 @@ class ProgressWindowController:
 
     def terminateProcess_(self, sender):
         """Terminate the process."""
-        import psutil
         pid = self.process_info.get("pid")
-        if pid and psutil.pid_exists(pid):
-            psutil.Process(pid).terminate()
-            self.status_label.setStringValue_("Status: Terminated")
-            self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process terminated by user")
-            # Accessibility announcement
-            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process terminated")
-            # Update button accessibility
-            self.terminate_btn.setEnabled_(False)
-            self.terminate_btn.setAccessibilityHelp_("Process has been terminated")
-            self.pause_btn.setEnabled_(False)
-            self.pause_btn.setAccessibilityHelp_("Process has been terminated")
+        started_at = self.process_info.get("started_at")
+        if pid and verify_process_identity(pid, started_at):
+            import psutil
+            try:
+                psutil.Process(pid).terminate()
+                self.status_label.setStringValue_("Status: Terminated")
+                self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process terminated by user")
+                # Accessibility announcement
+                _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process terminated")
+                # Update button accessibility
+                self.terminate_btn.setEnabled_(False)
+                self.terminate_btn.setAccessibilityHelp_("Process has been terminated")
+                self.pause_btn.setEnabled_(False)
+                self.pause_btn.setAccessibilityHelp_("Process has been terminated")
+            except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError) as e:
+                logging.warning(f"[ProgressWindow] Could not terminate process: {e}")
+                self.status_label.setStringValue_("Status: Already terminated")
 
     def togglePause_(self, sender):
         """Toggle pause/resume."""
-        import psutil
         pid = self.process_info.get("pid")
-        if not pid or not psutil.pid_exists(pid):
+        started_at = self.process_info.get("started_at")
+        if not pid or not verify_process_identity(pid, started_at):
             return
 
-        if self.paused:
-            os.kill(pid, signal.SIGCONT)
-            self.pause_btn.setTitle_("Pause")
-            self.pause_btn.setAccessibilityLabel_("Pause process")
-            self.status_label.setStringValue_("Status: Running")
-            self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process resumed")
-            # Accessibility announcement
-            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process resumed")
-        else:
-            os.kill(pid, signal.SIGSTOP)
-            self.pause_btn.setTitle_("Resume")
-            self.pause_btn.setAccessibilityLabel_("Resume process")
-            self.status_label.setStringValue_("Status: Paused")
-            self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process paused")
-            # Accessibility announcement
-            _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process paused")
-        self.paused = not self.paused
+        try:
+            if self.paused:
+                os.kill(pid, signal.SIGCONT)
+                self.pause_btn.setTitle_("Pause")
+                self.pause_btn.setAccessibilityLabel_("Pause process")
+                self.status_label.setStringValue_("Status: Running")
+                self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process resumed")
+                # Accessibility announcement
+                _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process resumed")
+            else:
+                os.kill(pid, signal.SIGSTOP)
+                self.pause_btn.setTitle_("Resume")
+                self.pause_btn.setAccessibilityLabel_("Resume process")
+                self.status_label.setStringValue_("Status: Paused")
+                self._add_log_line(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Process paused")
+                # Accessibility announcement
+                _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process paused")
+            self.paused = not self.paused
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            logging.warning(f"[ProgressWindow] Could not toggle pause: {e}")
+            self.status_label.setStringValue_("Status: Error controlling process")
 
     def openLogsFolder_(self, sender):
         """Open logs folder in Finder."""
