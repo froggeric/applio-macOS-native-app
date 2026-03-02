@@ -539,12 +539,13 @@ def check_for_updates():
 if getattr(sys, "frozen", False):
     _early_prefs = PreferencesManager()
     _early_data_path = _early_prefs.get_data_path() or os.path.expanduser("~/Applio")
-    # Debug: write to file since logging not set up yet
-    with open("/tmp/applio_debug.txt", "a") as f:
-        f.write(f"=== Early env setup ===\n")
-        f.write(f"_early_data_path={_early_data_path}\n")
-        f.write(f"APPLIO_LOGS_PATH={os.path.join(_early_data_path, 'logs')}\n")
-        f.write(f"PID={os.getpid()}\n")
+    # Debug logging only when APPLIO_DEBUG env var is set
+    if os.environ.get("APPLIO_DEBUG"):
+        with open("/tmp/applio_debug.txt", "a") as f:
+            f.write(f"=== Early env setup ===\n")
+            f.write(f"_early_data_path={_early_data_path}\n")
+            f.write(f"APPLIO_LOGS_PATH={os.path.join(_early_data_path, 'logs')}\n")
+            f.write(f"PID={os.getpid()}\n")
     os.environ["APPLIO_DATA_PATH"] = _early_data_path
     os.environ["APPLIO_LOGS_PATH"] = os.path.join(_early_data_path, "logs")
     # Also set these for subprocess scripts that may need them

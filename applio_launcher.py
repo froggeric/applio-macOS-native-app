@@ -31,6 +31,7 @@ import datetime
 import fcntl
 import time
 from pathlib import Path
+from collections import deque
 
 # macOS native APIs
 try:
@@ -302,10 +303,12 @@ class ProgressWindowController:
         self.start_time = datetime.datetime.now()
         self.timer = None
         self._observer = None
-        self.log_lines = []
-        self.max_log_lines = 200
+        self.log_lines = deque(maxlen=200)  # Efficient O(1) append with auto-trimming
         self._last_file_pos = 0
         self._last_file_size = 0
+        # Epoch tracking for progress bar
+        self._total_epoch = process_info.get('total_epoch')
+        self._current_epoch = 0
 
         # Log file path
         self.log_file_path = process_info.get("log_file")
@@ -392,15 +395,28 @@ class ProgressWindowController:
         self.window.contentView().addSubview_(self.time_label)
         y -= 25
 
-        # Progress bar (indeterminate)
+        # Progress bar - use determinate mode if we have epoch info
+        total_epoch = self.process_info.get('total_epoch', 0)
         self.progress_bar = NSProgressIndicator.alloc().initWithFrame_(
             NSMakeRect(padding, y - 20, window_width - 2*padding, 20)
         )
-        self.progress_bar.setIndeterminate_(True)
-        self.progress_bar.startAnimation_(None)
+        if total_epoch and total_epoch > 0:
+            self.progress_bar.setIndeterminate_(False)
+            self.progress_bar.setMinValue_(0)
+            self.progress_bar.setMaxValue_(total_epoch)
+            self._total_epoch = total_epoch
+            self._current_epoch = 0
+        else:
+            self.progress_bar.setIndeterminate_(True)
+            self.progress_bar.startAnimation_(None)
+            self._total_epoch = None
+            self._current_epoch = None
         # Accessibility
         self.progress_bar.setAccessibilityLabel_("Progress indicator")
-        self.progress_bar.setAccessibilityHelp_("Shows that the process is actively running")
+        if total_epoch and total_epoch > 0:
+            self.progress_bar.setAccessibilityHelp_(f"Training progress: 0 of {total_epoch} epochs")
+        else:
+            self.progress_bar.setAccessibilityHelp_("Shows that the process is actively running")
         self.progress_bar.setAccessibilityIdentifier_("progress_bar")
         self.window.contentView().addSubview_(self.progress_bar)
         y -= 30
@@ -498,11 +514,18 @@ class ProgressWindowController:
         )
 
     def updateElapsedTime_(self, timer):
-        """Update elapsed time display."""
+        """Update elapsed time display and progress bar."""
         elapsed = datetime.datetime.now() - self.start_time
         hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
         self.time_label.setStringValue_(f"Elapsed: {hours:02d}:{minutes:02d}:{seconds:02d}")
+
+        # Update progress bar with epoch info if available
+        if self._total_epoch and self._current_epoch:
+            self.progress_bar.setDoubleValue_(self._current_epoch)
+            self.progress_bar.setAccessibilityHelp_(
+                f"Training progress: {self._current_epoch} of {self._total_epoch} epochs"
+            )
 
         # Also poll log file
         self.pollLogFile_(None)
@@ -514,12 +537,15 @@ class ProgressWindowController:
             current_status = self.status_label.stringValue()
             if "Running" in current_status or "Paused" in current_status:
                 self.status_label.setStringValue_("Status: Completed")
-                self.progress_bar.stopAnimation_(None)
+                if self._total_epoch:
+                    self.progress_bar.setDoubleValue_(self._total_epoch)
+                else:
+                    self.progress_bar.stopAnimation_(None)
                 # Accessibility announcement for completion
                 _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process completed")
 
     def pollLogFile_(self, timer):
-        """Poll log file for new content."""
+        """Poll log file for new content and parse epoch progress."""
         if not self.log_file_path or not os.path.exists(self.log_file_path):
             return
 
@@ -534,14 +560,36 @@ class ProgressWindowController:
 
                     for line in new_content.splitlines():
                         self._add_log_line(line)
+                        # Parse epoch progress from log lines
+                        self._parse_epoch_progress(line)
         except Exception as e:
             logging.warning(f"[ProgressWindow] Error tailing log: {e}")
 
+    def _parse_epoch_progress(self, line):
+        """Parse epoch progress from log line and update progress bar."""
+        if not self._total_epoch:
+            return
+
+        import re
+        # Match patterns like "Epoch 1/100" or "epoch 1/100" or "Epoch: 1/100"
+        match = re.search(r'[Ee]poch[:\s]*(\d+)\s*/\s*(\d+)', line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            if total > 0 and current <= total:
+                self._current_epoch = current
+                if not self._total_epoch:
+                    self._total_epoch = total
+                # Update progress bar
+                self.progress_bar.setDoubleValue_(current)
+                # Update accessibility
+                self.progress_bar.setAccessibilityHelp_(
+                    f"Training progress: Epoch {current} of {total}"
+                )
+
     def _add_log_line(self, line):
-        """Add a line to the log view."""
+        """Add a line to the log view (deque auto-trims to maxlen)."""
         self.log_lines.append(line)
-        if len(self.log_lines) > self.max_log_lines:
-            self.log_lines = self.log_lines[-self.max_log_lines:]
         self.log_view.setString_("\n".join(self.log_lines))
         # Scroll to bottom
         self.log_scroll.reflectScrolledClipView_(self.log_scroll.contentView())
