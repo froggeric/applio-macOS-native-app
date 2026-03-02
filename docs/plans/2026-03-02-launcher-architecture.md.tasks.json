@@ -1,0 +1,12 @@
+{
+  "planPath": "docs/plans/2026-03-02-launcher-architecture.md",
+  "tasks": [
+    {"id": 7, "subject": "Task 0: Create Log File Redirection Patch", "status": "pending"},
+    {"id": 8, "subject": "Task 1: Create applio_launcher.py Foundation", "status": "pending", "blockedBy": [7]},
+    {"id": 9, "subject": "Task 2: Update build_macos.py Entry Point", "status": "pending", "blockedBy": [8]},
+    {"id": 10, "subject": "Task 3: Refactor macos_wrapper.py - Remove Progress Window", "status": "pending", "blockedBy": [9]},
+    {"id": 11, "subject": "Task 4: Implement Full Menu in Launcher", "status": "pending", "blockedBy": [10]},
+    {"id": 12, "subject": "Task 5: Integration Testing", "status": "pending", "blockedBy": [11]}
+  ],
+  "lastUpdated": "2026-03-02T12:00:00Z"
+}
