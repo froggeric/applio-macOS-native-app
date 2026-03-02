@@ -95,7 +95,7 @@ def get_applio_version():
         return "3.6.0"
 
 APPLIO_VERSION = get_applio_version()
-ENTRY_POINT = "macos_wrapper.py"
+ENTRY_POINT = "applio_launcher.py"
 ICON_FILE = "assets/ICON.ico"
 
 # Signing configuration
@@ -453,6 +453,7 @@ datas = [
     ("tabs", "tabs"),
     ("core.py", "."),
     ("app.py", "."),
+    ("macos_wrapper.py", "."),  # Spawned by applio_launcher.py
 ]
 
 # In lite mode, we need to handle rvc/ differently to exclude models
