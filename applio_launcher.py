@@ -41,7 +41,7 @@ try:
         NSTextView, NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
         NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
-        NSAccessibilityAnnouncementNotification,
+        NSAccessibilityAnnouncementRequestedNotification,
         NSCommandKeyMask, NSShiftKeyMask,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
@@ -66,7 +66,7 @@ if NATIVE_APIS_AVAILABLE:
                 userInfo = {"AXAnnouncementKey": message}
                 NSAccessibilityPostNotification(
                     element,
-                    NSAccessibilityAnnouncementNotification,
+                    NSAccessibilityAnnouncementRequestedNotification,
                     userInfo
                 )
             except Exception:
