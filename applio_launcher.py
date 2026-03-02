@@ -39,7 +39,7 @@ try:
         NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
     )
-    from Foundation import NSRunLoop, NSDate, NSNotificationCenter
+    from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
     NATIVE_APIS_AVAILABLE = True
 except ImportError:
@@ -435,6 +435,8 @@ class ApplioLauncher:
     def __init__(self):
         self.wrapper_process = None
         self.progress_window = None
+        self.progress_menu_item = None  # Reference to update state
+        self._menu_update_timer = None
         self._setup_signal_handlers()
 
     def start(self):
@@ -538,17 +540,255 @@ class ApplioLauncher:
                 logging.info(f"[Wrapper] {line.rstrip()}")
 
     def _setup_menu(self):
-        """Setup native macOS menu."""
+        """Setup native macOS menu bar."""
+        if not NATIVE_APIS_AVAILABLE:
+            logging.warning("[Launcher] Native APIs not available, skipping menu setup")
+            return
+
+        from AppKit import NSApplicationActivationPolicyRegular
+
+        # Set app activation policy to show in Dock and menu bar
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+
+        # Create main menu bar
+        main_menu = NSMenu.alloc().init()
+
+        # =====================================================================
+        # App menu (named "Applio" in menu bar)
+        # =====================================================================
+        app_menu = NSMenu.alloc().init()
+
+        app_item = NSMenuItem.alloc().init()
+        app_item.setSubmenu_(app_menu)
+        main_menu.addItem_(app_item)
+
+        # About Applio
+        about_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "About Applio", "showAbout:", ""
+        )
+        app_menu.addItem_(about_item)
+
+        # Check for Updates...
+        update_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Check for Updates...", "checkUpdates:", ""
+        )
+        app_menu.addItem_(update_item)
+
+        app_menu.addItem_(NSMenuItem.separatorItem())
+
+        # Quit Applio (Cmd+Q)
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit Applio", "terminate:", "q"
+        )
+        app_menu.addItem_(quit_item)
+
+        # =====================================================================
+        # File menu
+        # =====================================================================
+        file_menu = NSMenu.alloc().initWithTitle_("File")
+
+        file_item = NSMenuItem.alloc().init()
+        file_item.setSubmenu_(file_menu)
+        main_menu.addItem_(file_item)
+
+        # Set Data Location...
+        data_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Set Data Location...", "setDataLocation:", ""
+        )
+        file_menu.addItem_(data_item)
+
+        # =====================================================================
+        # Window menu
+        # =====================================================================
+        window_menu = NSMenu.alloc().initWithTitle_("Window")
+
+        window_item = NSMenuItem.alloc().init()
+        window_item.setSubmenu_(window_menu)
+        main_menu.addItem_(window_item)
+
+        # Progress Monitor (Cmd+M) - enabled only when processes active
+        self.progress_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Progress Monitor", "showProgressMonitor:", "m"
+        )
+        self.progress_menu_item.setEnabled_(False)
+        window_menu.addItem_(self.progress_menu_item)
+
+        window_menu.addItem_(NSMenuItem.separatorItem())
+
+        # Show Main Window (Cmd+Shift+W)
+        main_window_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Show Main Window", "showMainWindow:", "w"
+        )
+        # Cmd+Shift+W modifier
+        main_window_item.setKeyEquivalentModifierMask_(1048576 | 131072)  # Command | Shift
+        window_menu.addItem_(main_window_item)
+
+        # Minimize (Cmd+M would conflict, use no shortcut or different)
+        minimize_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Minimize", "performMiniaturize:", ""
+        )
+        window_menu.addItem_(minimize_item)
+
+        # Set the menu
+        NSApp.setMainMenu_(main_menu)
+
+        # Update progress menu item state based on active processes
+        self._update_menu_state()
+
+        # Start periodic menu state updates
+        self._start_menu_update_timer()
+
+        logging.info("[Launcher] Menu bar setup complete")
+
+    def _start_menu_update_timer(self):
+        """Start timer to periodically update menu state."""
+        if not NATIVE_APIS_AVAILABLE:
+            return
+        from AppKit import NSTimer
+        self._menu_update_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            2.0,  # Update every 2 seconds
+            self,
+            "menuUpdateTimerFired:",
+            None,
+            True
+        )
+
+    def menuUpdateTimerFired_(self, timer):
+        """Periodic menu state update."""
+        self._update_menu_state()
+
+    def _update_menu_state(self):
+        """Update menu item states based on running processes."""
+        if not self.progress_menu_item:
+            return
+
+        active = get_active_processes()
+        has_active = len(active) > 0
+
+        # Enable/disable Progress Monitor menu item
+        self.progress_menu_item.setEnabled_(has_active)
+
+        # Update title to show count
+        if has_active:
+            self.progress_menu_item.setTitle_(f"Progress Monitor ({len(active)} active)")
+        else:
+            self.progress_menu_item.setTitle_("Progress Monitor")
+
+    # =====================================================================
+    # Menu Action Methods
+    # =====================================================================
+
+    def showAbout_(self, sender):
+        """Show About dialog."""
         if not NATIVE_APIS_AVAILABLE:
             return
 
-        # Create app menu
-        app_menu = NSMenu.alloc().init()
+        from AppKit import NSAlert, NSAlertStyleInformational
 
-        # Add menu items...
-        # (Full menu implementation here)
+        # Load version from config
+        version = "Unknown"
+        try:
+            import json
+            config_path = os.path.join(BASE_PATH, "assets", "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    version = config.get("version", "Unknown")
+        except Exception:
+            pass
 
-        NSApp.setMainMenu_(app_menu)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Applio")
+        alert.setInformativeText_(
+            f"Version {version}\n\n"
+            "Voice Conversion Application\n"
+            "Based on RVC (Retrieval-Based Voice Conversion)\n\n"
+            "© 2024-2025 IA Hispano"
+        )
+        alert.setAlertStyle_(NSAlertStyleInformational)
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
+
+    def checkUpdates_(self, sender):
+        """Check for updates."""
+        if not NATIVE_APIS_AVAILABLE:
+            return
+
+        from AppKit import NSAlert, NSAlertStyleInformational
+
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Check for Updates")
+        alert.setInformativeText_(
+            "To check for updates, visit:\n\n"
+            "https://github.com/froggeric/applio-macOS-native-app/releases"
+        )
+        alert.setAlertStyle_(NSAlertStyleInformational)
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
+
+    def setDataLocation_(self, sender):
+        """Open dialog to set data location."""
+        if not NATIVE_APIS_AVAILABLE:
+            return
+
+        from AppKit import NSOpenPanel, NSFileHandlingPanelOKButton
+
+        # Create open panel configured to select folders
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(False)
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setMessage_("Select a folder to store Applio data (models, training, logs):")
+        panel.setPrompt_("Choose")
+
+        # Get current data path as starting point
+        current_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
+        panel.setDirectoryURL_(NSURL.fileURLWithPath_(current_path))
+
+        # Show panel
+        result = panel.runModal()
+
+        if result == NSFileHandlingPanelOKButton:
+            urls = panel.URLs()
+            if urls:
+                new_path = urls[0].path()
+                logging.info(f"[Launcher] User selected new data location: {new_path}")
+
+                # Save preference via NSUserDefaults
+                from Foundation import NSUserDefaults
+                defaults = NSUserDefaults.standardUserDefaults()
+                defaults.setObject_forKey_(new_path, "dataPath")
+
+                # Notify user they need to restart
+                from AppKit import NSAlert, NSAlertStyleWarning
+                alert = NSAlert.alloc().init()
+                alert.setMessageText_("Restart Required")
+                alert.setInformativeText_(
+                    f"Data location set to:\n{new_path}\n\n"
+                    "Please restart Applio for this change to take effect."
+                )
+                alert.setAlertStyle_(NSAlertStyleWarning)
+                alert.addButtonWithTitle_("OK")
+                alert.runModal()
+
+    def showProgressMonitor_(self, sender):
+        """Show progress monitor window for active processes."""
+        active = get_active_processes()
+        if active:
+            logging.info(f"[Launcher] Showing progress monitor for {len(active)} processes")
+            self._show_progress_window_for_processes(active)
+        else:
+            logging.info("[Launcher] No active processes to monitor")
+
+    def showMainWindow_(self, sender):
+        """Show main Gradio window.
+
+        Note: The main window is managed by macos_wrapper.py running in a subprocess.
+        This menu item is primarily for user awareness; the wrapper handles window visibility.
+        """
+        logging.info("[Launcher] Show Main Window requested (window managed by wrapper subprocess)")
+        # The main window is controlled by the wrapper subprocess
+        # We could send a signal or use IPC to tell it to show, but for now just log
 
     def _show_progress_window_for_processes(self, processes):
         """Show progress window for the first active process."""
@@ -564,6 +804,12 @@ class ApplioLauncher:
 
     def _cleanup(self):
         """Clean up on exit."""
+        # Stop menu update timer
+        if self._menu_update_timer:
+            self._menu_update_timer.invalidate()
+            self._menu_update_timer = None
+
+        # Terminate wrapper process
         if self.wrapper_process and self.wrapper_process.poll() is None:
             self.wrapper_process.terminate()
 
