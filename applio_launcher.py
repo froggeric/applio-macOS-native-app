@@ -125,6 +125,12 @@ if len(sys.argv) > 1:
             script_path = os.path.join(BASE_PATH, potential_script)
 
         if script_path:
+            # Add script's directory to sys.path so relative imports work
+            # This is needed because runpy.run_path doesn't add the script's dir to path
+            script_dir = os.path.dirname(os.path.abspath(script_path))
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+
             # Delegate to script via runpy
             import runpy
             sys.argv = [script_path] + sys.argv[2:]
