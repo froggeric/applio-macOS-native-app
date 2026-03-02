@@ -58,7 +58,32 @@ else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 # =================================================================
-# 2. Constants & Configuration
+# 2. Subprocess Mode Detection (MUST BE BEFORE LOGGING)
+# =================================================================
+# In PyInstaller frozen apps, sys.executable points to this launcher.
+# When we spawn macos_wrapper.py via subprocess.Popen([sys.executable, "macos_wrapper.py"]),
+# this launcher is re-executed with macos_wrapper.py as argv[1].
+# We detect this and delegate to the wrapper.
+
+if len(sys.argv) > 1:
+    potential_script = sys.argv[1]
+    if potential_script.endswith('macos_wrapper.py'):
+        # Find the wrapper script
+        script_path = None
+        if os.path.exists(potential_script):
+            script_path = potential_script
+        elif os.path.exists(os.path.join(BASE_PATH, potential_script)):
+            script_path = os.path.join(BASE_PATH, potential_script)
+
+        if script_path:
+            # Delegate to wrapper via runpy
+            import runpy
+            sys.argv = [script_path] + sys.argv[2:]
+            runpy.run_path(script_path, run_name="__main__")
+            sys.exit(0)
+
+# =================================================================
+# 3. Constants & Configuration
 # =================================================================
 PROCESS_STATE_FILE = os.path.expanduser("~/.applio/active_processes.json")
 LOG_TAIL_INTERVAL = 0.5  # seconds
@@ -74,7 +99,7 @@ logging.basicConfig(
 logging.info("[Launcher] Starting Applio Launcher")
 
 # =================================================================
-# 3. Process State Management
+# 4. Process State Management
 # =================================================================
 
 def get_process_state_path():
@@ -134,7 +159,7 @@ def get_active_processes():
 
 
 # =================================================================
-# 4. Progress Window Controller (moved from macos_wrapper.py)
+# 5. Progress Window Controller (moved from macos_wrapper.py)
 # =================================================================
 
 class ProgressWindowController:
@@ -426,7 +451,7 @@ class ProgressWindowController:
 
 
 # =================================================================
-# 5. Main Launcher Class
+# 6. Main Launcher Class
 # =================================================================
 
 class ApplioLauncher:
@@ -545,10 +570,13 @@ class ApplioLauncher:
             logging.warning("[Launcher] Native APIs not available, skipping menu setup")
             return
 
-        from AppKit import NSApplicationActivationPolicyRegular
+        from AppKit import NSApplicationActivationPolicyRegular, NSApplication
+
+        # Ensure NSApplication is initialized
+        app = NSApplication.sharedApplication()
 
         # Set app activation policy to show in Dock and menu bar
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
 
         # Create main menu bar
         main_menu = NSMenu.alloc().init()
@@ -815,7 +843,7 @@ class ApplioLauncher:
 
 
 # =================================================================
-# 6. Entry Point
+# 7. Entry Point
 # =================================================================
 
 if __name__ == "__main__":

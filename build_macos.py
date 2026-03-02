@@ -444,6 +444,37 @@ HIDDEN_IMPORTS = [
     "soundfile",
     "_soundfile",
     "webview.platforms.cocoa",
+    "wget",  # Used by rvc/lib/utils.py for downloads
+    "resampy",  # Audio resampling library
+    "librosa",  # Audio analysis library
+    "soundfile",  # Audio file I/O
+    "_soundfile",  # soundfile C extension
+    "torchcrepe",  # CREPE F0 estimation with PyTorch
+    "torchfcpe",  # FCPE F0 estimation
+    "pysndfile",  # Sound file library
+    "nnAudio",  # Neural network audio processing
+    "pyworld",  # WORLD vocoder
+    "faiss",  # Similarity search for RVC
+    "faiss-cpu",  # CPU version of faiss
+    "soxr",  # High-quality audio resampling
+    "noisereduce",  # Noise reduction
+    "pedalboard",  # Audio effects
+    "transformers",  # Hugging Face transformers
+    "transformers.models.hubert",  # HuBERT model
+    "diffusers",  # Diffusion models
+    "diffusers.utils",  # Diffusers utilities
+    "onnxruntime",  # ONNX runtime
+    "onnx",  # ONNX format
+    "pypresence",  # Discord Rich Presence
+    "requests",  # HTTP library
+    "pillow",  # Image processing
+    "PIL",  # Pillow legacy import
+    "webrtcvad",  # Voice Activity Detection
+    "webrtcvad_wheels",  # webrtcvad wheels package
+    "edge_tts",  # Edge TTS
+    "edge_tts.communicate",  # Edge TTS communicate module
+    "demucs",  # Source separation
+    "demucs.api",  # Demucs API
 ]
 
 # Collect data files - always include these
