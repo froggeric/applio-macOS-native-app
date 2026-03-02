@@ -824,12 +824,17 @@ class ApplioLauncher:
 
         logging.info(f"[Launcher] Spawning wrapper: {wrapper_path}")
 
+        # Set environment variable so wrapper knows it's running under launcher
+        env = os.environ.copy()
+        env["APPLIO_LAUNCHED_BY_LAUNCHER"] = "1"
+
         self.wrapper_process = subprocess.Popen(
             [sys.executable, wrapper_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
             universal_newlines=True,
+            env=env,  # Pass modified environment
         )
 
         # Save wrapper PID

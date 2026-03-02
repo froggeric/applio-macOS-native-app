@@ -274,20 +274,72 @@ _main_window_ref = None
 _shutting_down = False  # Global flag to prevent multiple shutdown attempts
 
 
+def show_close_confirmation() -> bool:
+    """Show native confirmation dialog when closing with active processes.
+
+    Returns:
+        True if user confirms quit, False if cancelled
+    """
+    if not NATIVE_APIS_AVAILABLE:
+        return True  # No native APIs, proceed with exit
+
+    from AppKit import NSAlert, NSAlertStyleWarning, NSAlertFirstButtonReturn
+
+    active = get_active_process_list()
+    if not active:
+        return True  # No active processes, allow close
+
+    # Build readable process list
+    process_info = "\n".join([
+        f"• {p.get('type', 'Unknown').capitalize()}: {p.get('model_name', 'Unknown model')}"
+        for p in active[:3]
+    ])
+    if len(active) > 3:
+        process_info += f"\n  ... and {len(active) - 3} more"
+
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Active Processes Running")
+    alert.setInformativeText_(
+        f"The following processes are still running:\n{process_info}\n\n"
+        "Closing now will terminate these processes.\n\n"
+        "Are you sure you want to quit?"
+    )
+    alert.setAlertStyle_(NSAlertStyleWarning)
+    alert.addButtonWithTitle_("Quit Anyway")
+    alert.addButtonWithTitle_("Cancel")
+
+    response = alert.runModal()
+    return response == NSAlertFirstButtonReturn
+
+
 def on_window_closing():
     """Handle main window closing event.
 
-    The launcher (applio_launcher.py) handles progress monitoring and
-    close confirmation. The wrapper simply exits when the window closes.
+    Checks for active processes and shows confirmation dialog if needed.
     """
     global _shutting_down
 
-    # Prevent multiple shutdown attempts
     if _shutting_down:
         logging.info("[Window] Already shutting down, ignoring duplicate close event")
         return
 
-    logging.info("[Window] on_window_closing() called - exiting")
+    # Check for active processes before closing
+    if has_active_processes():
+        logging.info("[Window] Active processes detected, showing confirmation")
+        if not show_close_confirmation():
+            logging.info("[Window] User cancelled close")
+            return  # User cancelled, don't close
+
+    # User confirmed or no active processes - terminate active processes gracefully
+    try:
+        from rvc.lib.tools.process_controller import ProcessController
+        terminated = ProcessController.terminate_all()
+        if terminated:
+            logging.info(f"[Window] Terminated {terminated} active processes")
+    except Exception as e:
+        logging.warning(f"[Window] Could not terminate processes: {e}")
+
+    logging.info("[Window] Exiting")
     _shutting_down = True
     os._exit(0)
 
@@ -1407,7 +1459,15 @@ class ApplioApp:
         _main_window_ref = self.window
 
         logging.info("Starting Webview GUI...")
-        webview.start(menu=get_native_menu(), debug=False)
+
+        # Only create pywebview menu if NOT launched by launcher
+        # When launched by launcher, the launcher's native NSMenu will be visible
+        if os.environ.get("APPLIO_LAUNCHED_BY_LAUNCHER"):
+            logging.info("Running under launcher - using launcher's native menu")
+            webview.start(debug=False)
+        else:
+            logging.info("Running standalone - creating pywebview menu")
+            webview.start(menu=get_native_menu(), debug=False)
 
 if __name__ == "__main__":
     app = ApplioApp()
