@@ -46,30 +46,45 @@ try:
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
 
-    def _announce_for_accessibility(element, message):
-        """Post an accessibility announcement for VoiceOver users."""
-        try:
-            NSAccessibilityPostNotification(element, NSAccessibilityAnnouncementNotification, message)
-        except Exception:
-            pass  # Silently fail if accessibility not available
+    NATIVE_APIS_AVAILABLE = True
+except ImportError:
+    NATIVE_APIS_AVAILABLE = False
+    print("WARNING: Native APIs not available. Install pyobjc.")
 
-    # Try to import NSAccessibilityPostNotification
+
+# Define accessibility announcement function based on API availability
+# CRITICAL: Define ONCE, not redefined in nested try/except
+if NATIVE_APIS_AVAILABLE:
     try:
         from AppKit import NSAccessibilityPostNotification
-    except ImportError:
-        # Fallback for older PyObjC versions
+
         def _announce_for_accessibility(element, message):
+            """Post an accessibility announcement for VoiceOver users."""
+            try:
+                # Use userInfo dictionary for the announcement message
+                userInfo = {"AXAnnouncementKey": message}
+                NSAccessibilityPostNotification(
+                    element,
+                    NSAccessibilityAnnouncementNotification,
+                    userInfo
+                )
+            except Exception:
+                pass  # Silently fail if accessibility not available
+    except ImportError:
+        # Fallback for older PyObjC versions without NSAccessibilityPostNotification
+        def _announce_for_accessibility(element, message):
+            """Post an accessibility announcement using NSNotificationCenter."""
             try:
                 NSNotificationCenter.defaultCenter().postNotificationName_object_userInfo_(
                     "AXAnnouncementRequested", element, {"AXAnnouncementKey": message}
                 )
             except Exception:
                 pass
-
-    NATIVE_APIS_AVAILABLE = True
-except ImportError:
-    NATIVE_APIS_AVAILABLE = False
-    print("WARNING: Native APIs not available. Install pyobjc.")
+else:
+    # Fallback when native APIs are not available at all
+    def _announce_for_accessibility(element, message):
+        """No-op fallback when native APIs are unavailable."""
+        pass
 
 # Performance tuning for Apple Silicon
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -177,7 +192,8 @@ def load_process_state():
 
     lock_path = path + ".lock"
     try:
-        with open(lock_path, "w") as lock_file:
+        # Use "a" mode to avoid truncating before lock is acquired
+        with open(lock_path, "a") as lock_file:
             if not _acquire_file_lock(lock_file):
                 logging.warning("[Launcher] Could not acquire lock for reading, proceeding anyway")
             try:
@@ -197,7 +213,8 @@ def save_process_state(state):
 
     lock_path = path + ".lock"
     try:
-        with open(lock_path, "w") as lock_file:
+        # Use "a" mode to avoid truncating before lock is acquired
+        with open(lock_path, "a") as lock_file:
             if not _acquire_file_lock(lock_file):
                 logging.warning("[Launcher] Could not acquire lock for writing, proceeding anyway")
             try:
@@ -309,13 +326,19 @@ class ProgressWindowController:
         # Epoch tracking for progress bar
         self._total_epoch = process_info.get('total_epoch')
         self._current_epoch = 0
+        self.window = None  # Initialize to None for safe cleanup
 
         # Log file path
         self.log_file_path = process_info.get("log_file")
 
-        # Create window
-        self._create_window()
-        self._create_ui()
+        # Create window with exception safety
+        try:
+            self._create_window()
+            self._create_ui()
+        except Exception:
+            # Ensure observer is removed if initialization fails
+            self._cleanup()
+            raise
 
     def _create_window(self):
         """Create the native window."""

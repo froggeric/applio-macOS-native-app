@@ -1023,16 +1023,22 @@ class AboutWindowController:
         self.panel.makeKeyAndOrderFront_(None)
 
 
+# Module-level reference to prevent garbage collection of AboutWindowController
+_about_controller = None
+
+
 def show_about_dialog():
     """Display native About Applio dialog."""
+    global _about_controller
     logging.info("[About Menu] show_about_dialog() called")
 
     if not NATIVE_APIS_AVAILABLE:
         logging.warning("[About Menu] Native APIs not available")
         return
 
-    about_controller = AboutWindowController()
-    about_controller.show()
+    # Store strong reference to prevent GC from closing the window
+    _about_controller = AboutWindowController()
+    _about_controller.show()
 
 # =================================================================
 # Menu Callback Wrappers

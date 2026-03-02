@@ -56,7 +56,8 @@ def _read_process_state():
         return {"version": 1, "processes": {}}
     lock_path = path + ".lock"
     try:
-        with open(lock_path, "w") as lock_file:
+        # Use "a" mode to avoid truncating before lock is acquired
+        with open(lock_path, "a") as lock_file:
             if not _acquire_file_lock(lock_file):
                 pass  # Proceed anyway
             try:
@@ -72,7 +73,8 @@ def _write_process_state(state):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     lock_path = path + ".lock"
     try:
-        with open(lock_path, "w") as lock_file:
+        # Use "a" mode to avoid truncating before lock is acquired
+        with open(lock_path, "a") as lock_file:
             if not _acquire_file_lock(lock_file):
                 pass  # Proceed anyway
             try:
