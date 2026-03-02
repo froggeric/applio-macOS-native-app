@@ -274,20 +274,28 @@ _main_window_ref = None
 _shutting_down = False  # Global flag to prevent multiple shutdown attempts
 
 
-def show_close_confirmation() -> bool:
+# Return codes for close confirmation dialog
+CLOSE_QUIT = 1       # Terminate all and exit
+CLOSE_KEEP_RUNNING = 2  # Hide window, keep processes running
+CLOSE_CANCEL = 3     # Cancel close, keep window open
+
+
+def show_close_confirmation() -> int:
     """Show native confirmation dialog when closing with active processes.
 
     Returns:
-        True if user confirms quit, False if cancelled
+        CLOSE_QUIT (1): User wants to terminate and quit
+        CLOSE_KEEP_RUNNING (2): User wants to keep processes running in background
+        CLOSE_CANCEL (3): User cancelled the close action
     """
     if not NATIVE_APIS_AVAILABLE:
-        return True  # No native APIs, proceed with exit
+        return CLOSE_QUIT  # No native APIs, proceed with exit
 
-    from AppKit import NSAlert, NSAlertStyleWarning, NSAlertFirstButtonReturn
+    from AppKit import NSAlert, NSAlertStyleWarning, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
 
     active = get_active_process_list()
     if not active:
-        return True  # No active processes, allow close
+        return CLOSE_QUIT  # No active processes, allow close
 
     # Build readable process list
     process_info = "\n".join([
@@ -301,23 +309,32 @@ def show_close_confirmation() -> bool:
     alert.setMessageText_("Active Processes Running")
     alert.setInformativeText_(
         f"The following processes are still running:\n{process_info}\n\n"
-        "Closing now will terminate these processes.\n\n"
-        "Are you sure you want to quit?"
+        "What would you like to do?"
     )
     alert.setAlertStyle_(NSAlertStyleWarning)
-    alert.addButtonWithTitle_("Quit Anyway")
-    alert.addButtonWithTitle_("Cancel")
+    alert.addButtonWithTitle_("Terminate & Quit")  # First button (NSAlertFirstButtonReturn)
+    alert.addButtonWithTitle_("Keep Running")       # Second button (NSAlertSecondButtonReturn)
+    alert.addButtonWithTitle_("Cancel")             # Third button
 
     response = alert.runModal()
-    return response == NSAlertFirstButtonReturn
+
+    if response == NSAlertFirstButtonReturn:
+        return CLOSE_QUIT
+    elif response == NSAlertSecondButtonReturn:
+        return CLOSE_KEEP_RUNNING
+    else:
+        return CLOSE_CANCEL
 
 
 def on_window_closing():
     """Handle main window closing event.
 
-    Checks for active processes and shows confirmation dialog if needed.
+    Checks for active processes and shows confirmation dialog with three options:
+    - Terminate & Quit: Terminate all processes and exit
+    - Keep Running: Hide window, keep processes running in background
+    - Cancel: Cancel close, keep window open
     """
-    global _shutting_down
+    global _shutting_down, _main_window_ref
 
     if _shutting_down:
         logging.info("[Window] Already shutting down, ignoring duplicate close event")
@@ -326,11 +343,24 @@ def on_window_closing():
     # Check for active processes before closing
     if has_active_processes():
         logging.info("[Window] Active processes detected, showing confirmation")
-        if not show_close_confirmation():
+        choice = show_close_confirmation()
+
+        if choice == CLOSE_CANCEL:
             logging.info("[Window] User cancelled close")
             return  # User cancelled, don't close
 
-    # User confirmed or no active processes - terminate active processes gracefully
+        elif choice == CLOSE_KEEP_RUNNING:
+            logging.info("[Window] User chose to keep running in background")
+            # Hide the main window instead of closing
+            if _main_window_ref:
+                _main_window_ref.hide()
+            logging.info("[Window] Main window hidden, processes continue in background")
+            return  # Don't exit, just hide
+
+        # CLOSE_QUIT - fall through to terminate and exit
+        logging.info("[Window] User chose to terminate and quit")
+
+    # User confirmed quit or no active processes - terminate active processes gracefully
     try:
         from rvc.lib.tools.process_controller import ProcessController
         terminated = ProcessController.terminate_all()
