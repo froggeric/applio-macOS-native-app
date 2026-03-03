@@ -197,6 +197,23 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - Phase detection: strips timestamps, matches "Starting X", "Xing", "X started" patterns
 - 2-second timeout without tqdm activity triggers phase completion logging
 
+**Rich Status Card:**
+- Phase icon + name (📁 Preprocessing, 🔬 Feature extraction, 🎯 Training, 🎵 Inference, 🗣️ TTS)
+- Visual progress bar with Unicode blocks (████░░░) + percentage
+- Stats grid: Speed, ETA, Phase Time, Items
+
+**Log syntax highlighting:**
+- Timestamps in gray
+- Phase starts (→) in blue
+- Completions (✓) in green
+- Errors (✗) in red
+- Warnings (⚠) in orange
+- Epoch milestones (◆) in purple
+- Monospace font (Menlo 11pt)
+
+**Status badge:**
+- Pill-shaped, color-coded: Running (green), Paused (orange), Completed (blue), Error (red)
+
 **Launcher architecture limitation:**
 - Both launcher and wrapper have `NSApplicationActivationPolicyRegular`, causing "2 icons in dock" - both are GUI processes
 
