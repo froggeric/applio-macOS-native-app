@@ -40,7 +40,7 @@ try:
         NSApplication, NSApp, NSMenu, NSMenuItem, NSWindow,
         NSButton, NSTextField, NSProgressIndicator, NSScrollView,
         NSTextView, NSMakeRect, NSTitledWindowMask, NSClosableWindowMask,
-        NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
+        NSBackingStoreBuffered, NSCenterTextAlignment, NSRightTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
         NSAccessibilityAnnouncementRequestedNotification,
         NSCommandKeyMask, NSShiftKeyMask, NSBox, NSColor,
@@ -513,7 +513,7 @@ class ProgressWindowController:
         # Row 1: Phase icon + name + counter (24px)
         row1_height = 24
         self.phase_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - row2_height, window_width - 2*padding, row2_height)
+            NSMakeRect(padding, y - row1_height, window_width - 2*padding, row1_height)
         )
         self.phase_label.setStringValue_("Waiting for progress...")
         self.phase_label.setBezeled_(False)
@@ -590,12 +590,12 @@ class ProgressWindowController:
 
         # Status card background box (adds visual separation)
         self.status_card_box = NSBox.alloc().initWithFrame_(
-            NSMakeRect(padding - 5, y, STATUS_CARD_HEIGHT + 4, window_width - 2*padding + 10, STATUS_CARD_HEIGHT + 4)
+            NSMakeRect(padding - 5, y, window_width - 2*padding + 10, STATUS_CARD_HEIGHT + 4)
         )
         self.status_card_box.setBoxType_(1)  # NSBoxCustom = 1
         self.status_card_box.setBorderType_(0)  # No border
         self.status_card_box.setFillColor_(NSColor.systemBlueColor().colorWithAlphaComponent_(0.05))
-        self.window.contentView().addSubview_positioned_relative_(self.status_card_box, 0, 0)  # Insert at bottom of view hierarchy
+        self.window.contentView().addSubview_(self.status_card_box)  # Add background box
 
         # Log scroll view
         log_height = 216  # Reduced from 250 to make room for live zone
