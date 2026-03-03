@@ -159,6 +159,7 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 **Debugging Frozen Apps:**
 - Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
 - Check `DEBUGGING_HISTORY.md` for documented debugging sessions and solutions
+- After fixes, verify build timestamp is AFTER commit timestamp: `stat -f "%Sm" dist/Applio.app/Contents/MacOS/Applio`
 - All fixes must go through `patches/` - NEVER modify upstream files directly
 - When stuck after 3+ fix attempts: STOP and question the architecture (per systematic-debugging skill)
 
@@ -181,6 +182,8 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - NSAlert for confirmations, NSWindow for complex UIs, NSPanel for utility windows
 - Dialog classes: `AboutWindowController`, `ProgressWindowController` in `applio_launcher.py`
 - CRITICAL: PyObjC method names - `method:with:param:` becomes `method_with_param_` (colons→underscores, append trailing underscore), e.g., `systemFontOfSize:weight:` → `systemFontOfSize_weight_` NOT `systemFontOfSize_ofWeight_`
+- CRITICAL: NSBox doesn't have `setFillColor_()` in PyObjC - use bordered style or layer-based background instead
+- `addSubview:positioned:relativeTo:` → `addSubview_positioned_relativeTo_` (NOT `addSubview_positioned_relative_`)
 
 **Progress window responsiveness:**
 - Timer must be started AFTER background thread: call `_start_timer()` after `_start_file_thread()`
