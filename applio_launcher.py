@@ -596,8 +596,8 @@ class ProgressWindowController:
         self.status_card_box.setBoxType_(1)  # NSBoxCustom = 1
         self.status_card_box.setBorderType_(1)  # NSLineBorder = 1 for subtle border
         self.status_card_box.setTitlePosition_(0)  # No title
-        # Insert at index 0 to place behind other elements
-        self.window.contentView().addSubview_positioned_relative_(self.status_card_box, 1, None)  # NSWindowBelow = 1
+        # Just add normally - the box serves as visual separator
+        self.window.contentView().addSubview_(self.status_card_box)
 
         # Log scroll view
         log_height = 216  # Reduced from 250 to make room for live zone
