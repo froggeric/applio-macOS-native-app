@@ -1,0 +1,13 @@
+{
+  "planPath": "docs/plans/2026-03-03-progress-window-ui-impl.md",
+  "tasks": [
+    {"id": "23", "subject": "Task 1: Increase window height", "status": "pending"},
+    {"id": "24", "subject": "Task 2: Add status badge to header", "status": "pending", "blockedBy": ["23"]},
+    {"id": "25", "subject": "Task 3: Convert live zone to Rich Status Card", "status": "pending", "blockedBy": ["23", "24"]},
+    {"id": "26", "subject": "Task 4: Change log font to monospace", "status": "pending", "blockedBy": ["23"]},
+    {"id": "27", "subject": "Task 5: Add syntax highlighting to log", "status": "pending", "blockedBy": ["23", "26"]},
+    {"id": "28", "subject": "Task 6: Test implementation", "status": "pending", "blockedBy": ["25", "27"]},
+    {"id": "29", "subject": "Task 7: Update documentation", "status": "pending", "blockedBy": ["28"]}
+  ],
+  "lastUpdated": "2026-03-03T14:00:00Z"
+}
