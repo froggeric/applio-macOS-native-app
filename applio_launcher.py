@@ -25,6 +25,7 @@ import sys
 import signal
 import subprocess
 import threading
+import queue
 import json
 import logging
 import datetime
@@ -503,7 +504,7 @@ class ProgressWindowController:
         self.live_zone.setDrawsBackground_(True)
         self.live_zone.setBackgroundColor_(NSColor.controlBackgroundColor())
         self.live_zone.setEditable_(False)
-        self.live_zone.setFont_(NSFont.systemFontOfSize_ofWeight_(12, NSFontWeightMedium))
+        self.live_zone.setFont_(NSFont.systemFontOfSize_weight_(12, NSFontWeightMedium))
         self.live_zone.setTextColor_(NSColor.systemBlueColor())
         self.live_zone.setAlignment_(NSCenterTextAlignment)
         self.live_zone.setAccessibilityLabel_("Live progress")
@@ -878,8 +879,11 @@ class ProgressWindowController:
                     self.progress_bar.setAccessibilityHelp_(
                         f"Training progress: Epoch {data['current']} of {data['total']}"
                     )
-            except:
+            except queue.Empty:
                 break  # Queue empty
+            except Exception as e:
+                logging.error(f"[ProgressWindow] Error processing queue update: {e}")
+                break
 
         # Check if process still running (with PID recycling protection)
         pid = self.process_info.get("pid")
