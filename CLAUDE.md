@@ -179,13 +179,15 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - All dialogs use native NSAlert/NSWindow/NSPanel instead of pywebview HTML
 - CRITICAL: Event loop choice matters - `AppHelper.runEventLoop()` for GUI apps with windows, NOT `runConsoleEventLoop()` (console tools only - causes window freeze)
 - NSAlert for confirmations, NSWindow for complex UIs, NSPanel for utility windows
-- Dialog classes: `AboutWindowController`, `ProgressWindowController` in `macos_wrapper.py`
+- Dialog classes: `AboutWindowController`, `ProgressWindowController` in `applio_launcher.py`
+- CRITICAL: PyObjC method names - `method:with:param:` becomes `method_with_param_` (colons→underscores, append trailing underscore), e.g., `systemFontOfSize:weight:` → `systemFontOfSize_weight_` NOT `systemFontOfSize_ofWeight_`
 
 **Progress window responsiveness:**
 - Timer must be started AFTER background thread: call `_start_timer()` after `_start_file_thread()`
 - Initial log read limited to last 50 lines (not entire file) to prevent queue flooding
 - Window needs `activateIgnoringOtherApps_(True)` to receive mouse/keyboard events
 - Text buffer limited to 100 lines with batch updates to prevent UI slowdown
+- CRITICAL: Never use bare `except:` in queue processing - use `except queue.Empty:` to catch empty queue; bare except silently swallows AttributeError from typos, hiding real bugs
 
 **Smart log display:**
 - Live zone shows active tqdm progress in single line (not spam of hundreds of lines)
