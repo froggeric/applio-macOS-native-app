@@ -815,6 +815,36 @@ class ProgressWindowController:
         # Update last activity time
         self._last_tqdm_time = datetime.datetime.now()
 
+    def _log_phase_completion(self):
+        """Log the completion of the current phase.
+
+        Returns True if a phase was logged, False if no phase was active.
+        """
+        if not self._live_phase or not self._live_phase_start:
+            return False
+
+        # Calculate duration
+        duration = datetime.datetime.now() - self._live_phase_start
+        total_seconds = int(duration.total_seconds())
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        if hours > 0:
+            duration_str = f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            duration_str = f"{minutes}m {seconds}s"
+        else:
+            duration_str = f"{seconds}s"
+
+        # Log completion
+        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        self._add_log_line(f"[{timestamp}] {self._live_phase} complete ({duration_str})")
+
+        # Clear phase tracking
+        self._live_phase = None
+        self._live_phase_start = None
+        return True
+
     def _start_timer(self):
         """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
@@ -1027,6 +1057,11 @@ class ProgressWindowController:
         if self._observer:
             NSNotificationCenter.defaultCenter().removeObserver_(self._observer)
             self._observer = None
+        # Reset smart log display state
+        self._live_phase = None
+        self._live_phase_start = None
+        self._last_tqdm_time = None
+        self._last_non_tqdm_line = ""
 
 
 # =================================================================
