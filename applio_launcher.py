@@ -657,8 +657,21 @@ class ProgressWindowController:
 
                         # Parse lines and queue updates
                         for line in lines:
-                            if line.strip():
-                                # Parse epoch progress
+                            if not line.strip():
+                                continue
+
+                            # Check if this is a tqdm line
+                            if self._is_tqdm_line(line):
+                                # Parse tqdm and queue for live zone
+                                tqdm_data = self._parse_tqdm_line(line)
+                                if tqdm_data:
+                                    # Detect phase from previous non-tqdm line
+                                    phase_name = self._detect_phase_name(self._last_non_tqdm_line)
+                                    self._file_queue.put(("tqdm", {"data": tqdm_data, "phase": phase_name}))
+                            else:
+                                # Non-tqdm line - store for phase detection and queue for logging
+                                self._last_non_tqdm_line = line
+                                # Parse epoch progress (for progress bar)
                                 self._parse_epoch_progress_bg(line)
                                 # Queue log line for main thread
                                 self._file_queue.put(("log_line", line))
