@@ -302,6 +302,29 @@ def preprocess_training_set(
 
     # print(f"Number of files: {len(files)}")
     audio_length = []
+
+    # Empty dataset warning
+
+    if not files:
+
+        print("=" * 60)
+
+        print("WARNING: No audio files found in dataset path:")
+
+        print(f"  {input_root}")
+
+        print("Supported formats: .wav, .mp3, .flac, .ogg")
+
+        print("Please check:")
+
+        print("  1. The path is correct")
+
+        print("  2. Audio files exist in the directory")
+
+        print("  3. Files have supported extensions")
+
+        print("=" * 60)
+
     with tqdm(total=len(files)) as pbar:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=num_processes

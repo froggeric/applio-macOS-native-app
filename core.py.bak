@@ -6,64 +6,6 @@ import subprocess
 from functools import lru_cache
 from distutils.util import strtobool
 
-def _resolve_custom_pretrained_path(path: str) -> str:
-    """Resolve custom pretrained path to absolute path.
-
-    The UI may return relative paths (rvc/models/...) which need to be
-    resolved relative to the data_path, not CWD.
-    """
-    if not path:
-        return path
-
-    # Already absolute
-    if os.path.isabs(path):
-        return path
-
-    # Try file-based configuration first
-    config_locations = [
-        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
-        os.path.expanduser("~/.applio/runtime_paths.json"),
-    ]
-
-    for config_path in config_locations:
-        if os.path.exists(config_path):
-            try:
-                import json
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                logs_path = config.get("logs_path")
-                if logs_path:
-                    data_path = os.path.dirname(logs_path)
-                    abs_path = os.path.join(data_path, path)
-                    if os.path.exists(abs_path):
-                        return abs_path
-            except (json.JSONDecodeError, IOError, KeyError):
-                pass
-
-    # Try environment variable
-    env_data_path = os.environ.get("APPLIO_DATA_PATH")
-    if env_data_path:
-        abs_path = os.path.join(env_data_path, path)
-        if os.path.exists(abs_path):
-            return abs_path
-
-    # Try known data locations
-    known_paths = [
-        os.path.expanduser("~/Applio"),
-        os.path.expanduser("~/Library/Application Support/Applio/data"),
-    ]
-
-    for data_path in known_paths:
-        if os.path.exists(data_path):
-            abs_path = os.path.join(data_path, path)
-            if os.path.exists(abs_path):
-                return abs_path
-
-    # Fallback: return path as-is (may fail, but at least we tried)
-    return path
-
-
-
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 
@@ -862,34 +804,9 @@ def run_train_script(
                 raise ValueError(
                     "Please provide the path to the pretrained G and D models."
                 )
-            pg, pd = _resolve_custom_pretrained_path(g_pretrained_path), _resolve_custom_pretrained_path(d_pretrained_path)
+            pg, pd = g_pretrained_path, d_pretrained_path
     else:
         pg, pd = "", ""
-
-    # Validate preprocessing and extraction before training
-    model_dir = os.path.join(logs_path, model_name)
-    model_info_path = os.path.join(model_dir, "model_info.json")
-
-    if not os.path.exists(model_info_path):
-        return f"Error: preprocessing not found. Run preprocessing first for model '{model_name}'."
-
-    try:
-        with open(model_info_path, "r", encoding="utf-8") as f:
-            model_info = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        return f"Error: could not read model_info.json: {e}."
-
-    total_seconds = model_info.get("total_seconds", 0)
-    if total_seconds <= 0:
-        return f"Error: no audio data was preprocessed (total_seconds={total_seconds}). Re-run preprocessing with a valid dataset."
-
-    extracted_dir = os.path.join(model_dir, "extracted")
-    if not os.path.exists(extracted_dir):
-        return f"Error: feature extraction not found. Run feature extraction first for model '{model_name}'."
-
-    extracted_files = os.listdir(extracted_dir)
-    if not extracted_files:
-        return f"Error: extracted directory is empty. Re-run feature extraction for model '{model_name}'."
 
     train_script_path = os.path.join("rvc", "train", "train.py")
     command = [

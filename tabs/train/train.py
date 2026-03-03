@@ -349,7 +349,7 @@ def train_tab():
                 sampling_rate = gr.Radio(
                     label=i18n("Sampling Rate"),
                     info=i18n("The sampling rate of the audio files."),
-                    choices=["32000", "40000", "48000"],
+                    choices=["32000", "40000", "44100", "48000"],
                     value="40000",
                     interactive=True,
                 )
@@ -958,13 +958,13 @@ def train_tab():
             def toggle_vocoder(vocoder):
                 if vocoder == "HiFi-GAN":
                     return {
-                        "choices": ["32000", "40000", "48000"],
+                        "choices": ["32000", "40000", "44100", "48000"],
                         "__type__": "update",
                         "value": "40000",
                     }
                 else:
                     return {
-                        "choices": ["24000", "32000"],
+                        "choices": ["24000", "32000", "44100"],
                         "__type__": "update",
                         "value": "32000",
                     }
