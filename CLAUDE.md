@@ -187,6 +187,14 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - Window needs `activateIgnoringOtherApps_(True)` to receive mouse/keyboard events
 - Text buffer limited to 100 lines with batch updates to prevent UI slowdown
 
+**Smart log display:**
+- Live zone shows active tqdm progress in single line (not spam of hundreds of lines)
+- Log zone shows only phase transitions, errors, and completions
+- Phase completion includes duration (e.g., "[14:32:15] Preprocessing complete (2m 35s)")
+- tqdm detection: regex `^\s*\d+%\|.*\|\s*\d+/\d+\s*\[` matches progress bar lines
+- Phase detection: strips timestamps, matches "Starting X", "Xing", "X started" patterns
+- 2-second timeout without tqdm activity triggers phase completion logging
+
 **Launcher architecture limitation:**
 - Both launcher and wrapper have `NSApplicationActivationPolicyRegular`, causing "2 icons in dock" - both are GUI processes
 
