@@ -44,7 +44,7 @@ try:
         NSBezelBorder, NSApplicationActivationPolicyRegular,
         NSAccessibilityAnnouncementRequestedNotification,
         NSCommandKeyMask, NSShiftKeyMask, NSBox, NSColor,
-        NSFontWeightMedium,
+        NSFontWeightMedium, NSFontWeightSemibold,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
@@ -506,40 +506,96 @@ class ProgressWindowController:
         self.window.contentView().addSubview_(self.progress_bar)
         y -= 30
 
-        # Live zone separator (top)
-        self.live_separator_top = NSBox.alloc().initWithFrame_(
-            NSMakeRect(padding, y - 2, window_width - 2*padding, 2)
-        )
-        self.live_separator_top.setBoxType_(1)  # NSBoxSeparator = 1
-        self.window.contentView().addSubview_(self.live_separator_top)
-        y -= 4
+        # Rich Status Card (72px total)
+        STATUS_CARD_HEIGHT = 72
+        y -= 4  # Small gap before card
 
-        # Live zone - single line for active tqdm progress
-        LIVE_ZONE_HEIGHT = 24
-        self.live_zone = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(padding, y - LIVE_ZONE_HEIGHT, window_width - 2*padding, LIVE_ZONE_HEIGHT)
+        # Row 1: Phase icon + name + counter (24px)
+        row1_height = 24
+        self.phase_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - row2_height, window_width - 2*padding, row2_height)
         )
-        self.live_zone.setStringValue_("Waiting for progress...")  # Placeholder until tqdm detected
-        self.live_zone.setBezeled_(False)
-        self.live_zone.setDrawsBackground_(True)
-        self.live_zone.setBackgroundColor_(NSColor.controlBackgroundColor())
-        self.live_zone.setEditable_(False)
-        self.live_zone.setFont_(NSFont.systemFontOfSize_weight_(12, NSFontWeightMedium))
-        self.live_zone.setTextColor_(NSColor.systemBlueColor())
-        self.live_zone.setAlignment_(NSCenterTextAlignment)
-        self.live_zone.setAccessibilityLabel_("Live progress")
-        self.live_zone.setAccessibilityHelp_("Current operation progress")
-        self.live_zone.setAccessibilityIdentifier_("live_zone")
-        self.window.contentView().addSubview_(self.live_zone)
-        y -= LIVE_ZONE_HEIGHT
+        self.phase_label.setStringValue_("Waiting for progress...")
+        self.phase_label.setBezeled_(False)
+        self.phase_label.setDrawsBackground_(False)
+        self.phase_label.setEditable_(False)
+        self.phase_label.setFont_(NSFont.boldSystemFontOfSize_(14))
+        self.phase_label.setTextColor_(NSColor.labelColor())
+        self.window.contentView().addSubview_(self.phase_label)
+        y -= row2_height + 2
 
-        # Live zone separator (bottom)
-        self.live_separator_bottom = NSBox.alloc().initWithFrame_(
-            NSMakeRect(padding, y - 2, window_width - 2*padding, 2)
+        # Row 2: Visual progress bar (20px)
+        row2_height = 20
+        self.visual_progress = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - row2_height, window_width - 2*padding - 50, row2_height)
         )
-        self.live_separator_bottom.setBoxType_(1)  # NSBoxSeparator = 1
-        self.window.contentView().addSubview_(self.live_separator_bottom)
-        y -= 6
+        self.visual_progress.setStringValue_("░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░")
+        self.visual_progress.setBezeled_(False)
+        self.visual_progress.setDrawsBackground_(False)
+        self.visual_progress.setEditable_(False)
+        self.visual_progress.setFont_(NSFont.fontWithName_size_("Menlo", 12))
+        self.visual_progress.setTextColor_(NSColor.systemBlueColor())
+        self.window.contentView().addSubview_(self.visual_progress)
+
+        # Progress percentage label
+        self.progress_percent = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(window_width - padding - 45, y - row2_height, 45, row2_height)
+        )
+        self.progress_percent.setStringValue_("0%")
+        self.progress_percent.setBezeled_(False)
+        self.progress_percent.setDrawsBackground_(False)
+        self.progress_percent.setEditable_(False)
+        self.progress_percent.setFont_(NSFont.boldSystemFontOfSize_(12))
+        self.progress_percent.setTextColor_(NSColor.secondaryLabelColor())
+        self.progress_percent.setAlignment_(NSRightTextAlignment)
+        self.window.contentView().addSubview_(self.progress_percent)
+        y -= row2_height + 2
+
+        # Row 3: Stats grid (24px)
+        row3_height = 24
+        stats_width = (window_width - 2*padding - 30) / 4
+        stats_labels = ["Speed", "ETA", "Phase Time", "Items"]
+        self.stats_values = []
+
+        for i, label_text in enumerate(stats_labels):
+            x_offset = padding + i * (stats_width + 10)
+            # Label
+            label = NSTextField.alloc().initWithFrame_(
+                NSMakeRect(x_offset, y - 10, stats_width, 10)
+            )
+            label.setStringValue_(label_text)
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setFont_(NSFont.systemFontOfSize_weight_(9, NSFontWeightMedium))
+            label.setTextColor_(NSColor.tertiaryLabelColor())
+            label.setAlignment_(NSCenterTextAlignment)
+            self.window.contentView().addSubview_(label)
+
+            # Value
+            value = NSTextField.alloc().initWithFrame_(
+                NSMakeRect(x_offset, y - row3_height, stats_width, 14)
+            )
+            value.setStringValue_("--")
+            value.setBezeled_(False)
+            value.setDrawsBackground_(False)
+            value.setEditable_(False)
+            value.setFont_(NSFont.systemFontOfSize_weight_(12, NSFontWeightSemibold))
+            value.setTextColor_(NSColor.labelColor())
+            value.setAlignment_(NSCenterTextAlignment)
+            self.window.contentView().addSubview_(value)
+            self.stats_values.append(value)
+
+        y -= row3_height + 4
+
+        # Status card background box (adds visual separation)
+        self.status_card_box = NSBox.alloc().initWithFrame_(
+            NSMakeRect(padding - 5, y, STATUS_CARD_HEIGHT + 4, window_width - 2*padding + 10, STATUS_CARD_HEIGHT + 4)
+        )
+        self.status_card_box.setBoxType_(1)  # NSBoxCustom = 1
+        self.status_card_box.setBorderType_(0)  # No border
+        self.status_card_box.setFillColor_(NSColor.systemBlueColor().colorWithAlphaComponent_(0.05))
+        self.window.contentView().addSubview_positioned_relative_(self.status_card_box, 0, 0)  # Insert at bottom of view hierarchy
 
         # Log scroll view
         log_height = 216  # Reduced from 250 to make room for live zone
@@ -804,7 +860,7 @@ class ProgressWindowController:
         return None
 
     def _update_live_zone(self, tqdm_data, phase_name=None):
-        """Update the live zone display with current tqdm progress."""
+        """Update the Rich Status Card with current tqdm progress."""
         if phase_name and phase_name != self._live_phase:
             # Phase changed - log completion of previous phase
             if self._live_phase and self._live_phase_start:
@@ -816,22 +872,58 @@ class ProgressWindowController:
             total_label = "files" if "preprocess" in phase_name.lower() else "items"
             self._add_log_line(f"{phase_name} started ({tqdm_data['total']} {total_label})")
 
-        # Build display string
+        # Build phase label with icon
         phase = self._live_phase or "Processing"
+        phase_icons = {
+            'preprocessing': '📁',
+            'feature extraction': '🔬',
+            'training': '🎯',
+            'inference': '🎵',
+            'tts': '🗣️',
+        }
+        icon = phase_icons.get(phase.lower(), '⚙️')
         current = tqdm_data['current']
         total = tqdm_data['total']
         total_label = "files" if "preprocess" in phase.lower() else "items"
 
-        parts = [f"  {phase}: {current}/{total} {total_label}"]
+        self.phase_label.setStringValue_(f"{icon}  {phase.upper()}  •  {current} of {total} {total_label}")
 
-        if tqdm_data.get('eta'):
-            parts.append(f"ETA: {tqdm_data['eta']}")
+        # Update visual progress bar (50 chars = 100%)
+        percent = tqdm_data.get('percent', 0)
+        filled = int(percent / 2)  # 50 chars max
+        empty = 50 - filled
+        bar = "█" * filled + "░" * empty
+        self.visual_progress.setStringValue_(bar)
+        self.progress_percent.setStringValue_(f"{percent}%")
 
+        # Update stats grid
+        # Speed
         if tqdm_data.get('rate'):
-            parts.append(f"{tqdm_data['rate']:.2f}{tqdm_data['rate_unit']}")
+            rate_str = f"{tqdm_data['rate']:.2f}{tqdm_data['rate_unit']}"
+        else:
+            rate_str = "--"
+        self.stats_values[0].setStringValue_(rate_str)
 
-        display_text = "  |  ".join(parts)
-        self.live_zone.setStringValue_(display_text)
+        # ETA
+        eta_str = tqdm_data.get('eta', '--') or '--'
+        self.stats_values[1].setStringValue_(eta_str)
+
+        # Phase Time
+        if self._live_phase_start:
+            elapsed = datetime.datetime.now() - self._live_phase_start
+            total_seconds = int(elapsed.total_seconds())
+            minutes, seconds = divmod(total_seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            if hours > 0:
+                time_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                time_str = f"{minutes}:{seconds:02d}"
+        else:
+            time_str = "--"
+        self.stats_values[2].setStringValue_(time_str)
+
+        # Items
+        self.stats_values[3].setStringValue_(f"{current}/{total}")
 
         # Update last activity time
         self._last_tqdm_time = datetime.datetime.now()
