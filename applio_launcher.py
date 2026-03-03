@@ -358,6 +358,11 @@ class ProgressWindowController:
         self.log_lines = deque(maxlen=200)  # Efficient O(1) append with auto-trimming
         self._last_file_pos = 0
         self._last_file_size = 0
+        # Smart log display state
+        self._live_phase = None          # Current phase name
+        self._live_phase_start = None    # Timestamp when phase started
+        self._last_tqdm_time = None      # Timestamp of last tqdm activity
+        self._last_non_tqdm_line = ""    # For phase name detection
         # Epoch tracking for progress bar
         self._total_epoch = process_info.get('total_epoch')
         self._current_epoch = 0
