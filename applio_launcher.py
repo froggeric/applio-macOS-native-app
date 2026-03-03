@@ -522,7 +522,7 @@ class ProgressWindowController:
         self.phase_label.setFont_(NSFont.boldSystemFontOfSize_(14))
         self.phase_label.setTextColor_(NSColor.labelColor())
         self.window.contentView().addSubview_(self.phase_label)
-        y -= row2_height + 2
+        y -= row1_height + 2
 
         # Row 2: Visual progress bar (20px)
         row2_height = 20
@@ -589,13 +589,15 @@ class ProgressWindowController:
         y -= row3_height + 4
 
         # Status card background box (adds visual separation)
+        # Note: NSBox doesn't support setFillColor in PyObjC, so we use a bordered style instead
         self.status_card_box = NSBox.alloc().initWithFrame_(
             NSMakeRect(padding - 5, y, window_width - 2*padding + 10, STATUS_CARD_HEIGHT + 4)
         )
         self.status_card_box.setBoxType_(1)  # NSBoxCustom = 1
-        self.status_card_box.setBorderType_(0)  # No border
-        self.status_card_box.setFillColor_(NSColor.systemBlueColor().colorWithAlphaComponent_(0.05))
-        self.window.contentView().addSubview_(self.status_card_box)  # Add background box
+        self.status_card_box.setBorderType_(1)  # NSLineBorder = 1 for subtle border
+        self.status_card_box.setTitlePosition_(0)  # No title
+        # Insert at index 0 to place behind other elements
+        self.window.contentView().addSubview_positioned_relative_(self.status_card_box, 1, None)  # NSWindowBelow = 1
 
         # Log scroll view
         log_height = 216  # Reduced from 250 to make room for live zone
