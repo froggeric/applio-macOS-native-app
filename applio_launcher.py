@@ -869,12 +869,14 @@ class ProgressWindowController:
 
                 if update_type == "log_line":
                     self._add_log_line(data)
+                elif update_type == "tqdm":
+                    # Update live zone with tqdm progress
+                    self._update_live_zone(data["data"], data.get("phase"))
                 elif update_type == "progress":
-                    self._current_epoch = data["current"]
-                    self._total_epoch = data["total"]
+                    # Update progress bar
                     self.progress_bar.setDoubleValue_(data["current"])
                     self.progress_bar.setAccessibilityHelp_(
-                        f"Training progress: {data['current']} of {data['total']} epochs"
+                        f"Training progress: Epoch {data['current']} of {data['total']}"
                     )
             except:
                 break  # Queue empty
@@ -891,6 +893,16 @@ class ProgressWindowController:
                 else:
                     self.progress_bar.stopAnimation_(None)
                 _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process completed")
+
+        # Check for live zone timeout (no tqdm for 2+ seconds)
+        if self._last_tqdm_time and self._live_phase:
+            elapsed = (datetime.datetime.now() - self._last_tqdm_time).total_seconds()
+            if elapsed > 2.0:
+                # Phase likely complete - log completion and clear live zone
+                # _log_phase_completion returns True only if a phase was active
+                if self._log_phase_completion():
+                    self.live_zone.setStringValue_("Waiting for progress...")
+                self._last_tqdm_time = None
 
     def _parse_epoch_progress(self, line):
         """Parse epoch progress from log line and update progress bar."""
