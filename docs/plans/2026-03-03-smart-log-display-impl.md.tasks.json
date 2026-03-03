@@ -1,0 +1,16 @@
+{
+  "planPath": "docs/plans/2026-03-03-smart-log-display-impl.md",
+  "tasks": [
+    {"id": 13, "subject": "Task 1: Add state tracking variables", "status": "pending"},
+    {"id": 14, "subject": "Task 2: Add tqdm line detection function", "status": "pending"},
+    {"id": 15, "subject": "Task 3: Add phase name detection", "status": "pending"},
+    {"id": 16, "subject": "Task 4: Create live zone UI element", "status": "pending"},
+    {"id": 17, "subject": "Task 5: Add live zone update method", "status": "pending", "blockedBy": [13, 16]},
+    {"id": 18, "subject": "Task 6: Add phase completion logging", "status": "pending", "blockedBy": [17]},
+    {"id": 19, "subject": "Task 7: Modify file poll worker for smart logging", "status": "pending", "blockedBy": [14, 15]},
+    {"id": 20, "subject": "Task 8: Update queue processing for tqdm messages", "status": "pending", "blockedBy": [17, 18, 19]},
+    {"id": 21, "subject": "Task 9: Test the implementation", "status": "pending", "blockedBy": [20]},
+    {"id": 22, "subject": "Task 10: Update documentation", "status": "pending", "blockedBy": [21]}
+  ],
+  "lastUpdated": "2026-03-03T12:00:00Z"
+}
