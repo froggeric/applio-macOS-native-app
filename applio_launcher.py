@@ -42,7 +42,8 @@ try:
         NSBackingStoreBuffered, NSCenterTextAlignment, NSFont,
         NSBezelBorder, NSApplicationActivationPolicyRegular,
         NSAccessibilityAnnouncementRequestedNotification,
-        NSCommandKeyMask, NSShiftKeyMask,
+        NSCommandKeyMask, NSShiftKeyMask, NSBox, NSColor,
+        NSFontWeightMedium,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
@@ -484,8 +485,43 @@ class ProgressWindowController:
         self.window.contentView().addSubview_(self.progress_bar)
         y -= 30
 
+        # Live zone separator (top)
+        self.live_separator_top = NSBox.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 2, window_width - 2*padding, 2)
+        )
+        self.live_separator_top.setBoxType_(1)  # NSBoxSeparator = 1
+        self.window.contentView().addSubview_(self.live_separator_top)
+        y -= 4
+
+        # Live zone - single line for active tqdm progress
+        LIVE_ZONE_HEIGHT = 24
+        self.live_zone = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, y - LIVE_ZONE_HEIGHT, window_width - 2*padding, LIVE_ZONE_HEIGHT)
+        )
+        self.live_zone.setStringValue_("Waiting for progress...")  # Placeholder until tqdm detected
+        self.live_zone.setBezeled_(False)
+        self.live_zone.setDrawsBackground_(True)
+        self.live_zone.setBackgroundColor_(NSColor.controlBackgroundColor())
+        self.live_zone.setEditable_(False)
+        self.live_zone.setFont_(NSFont.systemFontOfSize_ofWeight_(12, NSFontWeightMedium))
+        self.live_zone.setTextColor_(NSColor.systemBlueColor())
+        self.live_zone.setAlignment_(NSCenterTextAlignment)
+        self.live_zone.setAccessibilityLabel_("Live progress")
+        self.live_zone.setAccessibilityHelp_("Current operation progress")
+        self.live_zone.setAccessibilityIdentifier_("live_zone")
+        self.window.contentView().addSubview_(self.live_zone)
+        y -= LIVE_ZONE_HEIGHT
+
+        # Live zone separator (bottom)
+        self.live_separator_bottom = NSBox.alloc().initWithFrame_(
+            NSMakeRect(padding, y - 2, window_width - 2*padding, 2)
+        )
+        self.live_separator_bottom.setBoxType_(1)  # NSBoxSeparator = 1
+        self.window.contentView().addSubview_(self.live_separator_bottom)
+        y -= 6
+
         # Log scroll view
-        log_height = 250
+        log_height = 216  # Reduced from 250 to make room for live zone
         self.log_scroll = NSScrollView.alloc().initWithFrame_(
             NSMakeRect(padding, y - log_height, window_width - 2*padding, log_height)
         )
