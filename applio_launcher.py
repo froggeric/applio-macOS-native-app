@@ -386,7 +386,7 @@ class ProgressWindowController:
         """Create the native window."""
         style = NSTitledWindowMask | NSClosableWindowMask
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 500, 500),
+            NSMakeRect(0, 0, 500, 580),
             style,
             NSBackingStoreBuffered,
             False
@@ -408,7 +408,7 @@ class ProgressWindowController:
         """Create UI elements with accessibility support."""
         window_width = 500
         padding = 15
-        y = 500 - padding
+        y = 580 - padding
 
         # Set window accessibility
         self.window.setAccessibilityLabel_(f"Applio {self.process_type.capitalize()} Progress")
@@ -428,6 +428,26 @@ class ProgressWindowController:
         self.type_label.setAccessibilityLabel_(f"{self.process_type.capitalize()} process for model {model_name}")
         self.type_label.setAccessibilityIdentifier_("process_type_label")
         self.window.contentView().addSubview_(self.type_label)
+
+        # Status badge (pill-shaped, right side)
+        badge_width = 80
+        badge_height = 22
+        self.status_badge = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(window_width - padding - badge_width, y - 22, badge_width, badge_height)
+        )
+        self.status_badge.setStringValue_("Running")
+        self.status_badge.setBezeled_(False)
+        self.status_badge.setDrawsBackground_(True)
+        self.status_badge.setBackgroundColor_(NSColor.systemGreenColor().colorWithAlphaComponent_(0.2))
+        self.status_badge.setEditable_(False)
+        self.status_badge.setFont_(NSFont.systemFontOfSize_weight_(11, NSFontWeightMedium))
+        self.status_badge.setTextColor_(NSColor.systemGreenColor())
+        self.status_badge.setAlignment_(NSCenterTextAlignment)
+        self.status_badge.setWantsLayer_(True)
+        self.status_badge.layer().setCornerRadius_(11)
+        self.status_badge.setAccessibilityLabel_("Process status badge")
+        self.status_badge.setAccessibilityIdentifier_("status_badge")
+        self.window.contentView().addSubview_(self.status_badge)
         y -= 30
 
         # Status label
