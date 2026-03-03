@@ -697,6 +697,42 @@ class ProgressWindowController:
             'rate_unit': rate_unit
         }
 
+    def _detect_phase_name(self, line):
+        """Extract phase name from a log line.
+
+        Looks for patterns like:
+        - "Starting preprocessing..."
+        - "[11:02:15] Starting preprocessing..."
+        - "Preprocessing audio files..."
+        - "Extracting features..."
+        """
+        import re
+
+        # Strip timestamp prefix if present (e.g., "[11:02:15] ")
+        stripped = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]\s*', '', line)
+
+        # Common phase patterns
+        phase_patterns = [
+            r'[Ss]tarting\s+(\w+)',
+            r'^(\w+ing)\s+',  # "Preprocessing", "Extracting", "Training"
+            r'^(\w+)\s+started',
+        ]
+
+        for pattern in phase_patterns:
+            match = re.search(pattern, stripped, re.IGNORECASE)
+            if match:
+                phase = match.group(1).capitalize()
+                # Normalize common variations
+                phase_map = {
+                    'Preprocess': 'Preprocessing',
+                    'Extract': 'Extracting',
+                    'Train': 'Training',
+                    'Feature': 'Feature extraction',
+                }
+                return phase_map.get(phase, phase)
+
+        return None
+
     def _start_timer(self):
         """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
