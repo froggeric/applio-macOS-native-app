@@ -177,9 +177,18 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 
 **Native macOS dialogs (PyObjC):**
 - All dialogs use native NSAlert/NSWindow/NSPanel instead of pywebview HTML
-- CRITICAL: Native windows need `AppHelper.runConsoleEventLoop()` after `makeKeyAndOrderFront_()` to keep window alive - otherwise app exits immediately
+- CRITICAL: Event loop choice matters - `AppHelper.runEventLoop()` for GUI apps with windows, NOT `runConsoleEventLoop()` (console tools only - causes window freeze)
 - NSAlert for confirmations, NSWindow for complex UIs, NSPanel for utility windows
 - Dialog classes: `AboutWindowController`, `ProgressWindowController` in `macos_wrapper.py`
+
+**Progress window responsiveness:**
+- Timer must be started AFTER background thread: call `_start_timer()` after `_start_file_thread()`
+- Initial log read limited to last 50 lines (not entire file) to prevent queue flooding
+- Window needs `activateIgnoringOtherApps_(True)` to receive mouse/keyboard events
+- Text buffer limited to 100 lines with batch updates to prevent UI slowdown
+
+**Launcher architecture limitation:**
+- Both launcher and wrapper have `NSApplicationActivationPolicyRegular`, causing "2 icons in dock" - both are GUI processes
 
 **Patch idempotency pattern:**
 - Each patch function must check for its OWN specific marker (e.g., `if '_track_process("training"' in content`)
