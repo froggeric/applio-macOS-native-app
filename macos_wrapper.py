@@ -333,12 +333,16 @@ def on_window_closing():
     - Terminate & Quit: Terminate all processes and exit
     - Keep Running: Hide window, keep processes running in background
     - Cancel: Cancel close, keep window open
+
+    Returns:
+        False to cancel the close event (pywebview uses inverted logic!)
+        None/True to allow the close to proceed
     """
     global _shutting_down, _main_window_ref
 
     if _shutting_down:
         logging.info("[Window] Already shutting down, ignoring duplicate close event")
-        return
+        return False  # Cancel duplicate close (False = cancel in pywebview)
 
     # Check for active processes before closing
     if has_active_processes():
@@ -347,15 +351,17 @@ def on_window_closing():
 
         if choice == CLOSE_CANCEL:
             logging.info("[Window] User cancelled close")
-            return  # User cancelled, don't close
+            return False  # Cancel close, keep window open
 
         elif choice == CLOSE_KEEP_RUNNING:
             logging.info("[Window] User chose to keep running in background")
             # Hide the main window instead of closing
             if _main_window_ref:
                 _main_window_ref.hide()
+            # Notify launcher via runtime config so it shows progress window
+            _set_wrapper_window_visible(False)
             logging.info("[Window] Main window hidden, processes continue in background")
-            return  # Don't exit, just hide
+            return False  # Cancel close, window is just hidden
 
         # CLOSE_QUIT - fall through to terminate and exit
         logging.info("[Window] User chose to terminate and quit")
@@ -656,6 +662,7 @@ def _write_runtime_config():
         "logs_path": os.path.join(data_path, "logs"),
         "datasets_path": os.path.join(data_path, "assets", "datasets"),
         "audios_path": os.path.join(data_path, "assets", "audios"),
+        "wrapper_window_visible": True,  # IPC: tells launcher if wrapper window is hidden
         "timestamp": time.time() if 'time' in dir() else 0
     }
 
@@ -680,6 +687,47 @@ def _write_runtime_config():
             print(f"[runtime_config] Wrote config to: {config_path}")
         except Exception as e:
             print(f"[runtime_config] Failed to write config to {config_path}: {e}")
+
+
+def _set_wrapper_window_visible(visible: bool):
+    """
+    Update wrapper_window_visible flag in runtime config.
+
+    This is used for IPC: when wrapper hides its window, launcher
+    detects this and shows the progress monitoring window.
+    """
+    import json
+
+    config_locations = [
+        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
+        os.path.expanduser("~/.applio/runtime_paths.json"),
+    ]
+
+    for config_path in config_locations:
+        if not os.path.exists(config_path):
+            continue
+
+        try:
+            # Read existing config
+            with open(config_path, "r") as f:
+                config = json.load(f)
+
+            # Update the visibility flag
+            config["wrapper_window_visible"] = visible
+
+            # Write atomically
+            temp_path = config_path + ".tmp"
+            with open(temp_path, "w") as f:
+                json.dump(config, f, indent=2)
+            os.rename(temp_path, config_path)
+
+            logging.info(f"[runtime_config] Updated wrapper_window_visible={visible}")
+            return True
+        except Exception as e:
+            logging.warning(f"[runtime_config] Failed to update config at {config_path}: {e}")
+
+    return False
+
 
 # Write config in frozen mode (ensures it's available for all subprocesses)
 if getattr(sys, "frozen", False):

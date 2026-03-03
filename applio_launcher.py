@@ -165,8 +165,36 @@ FILE_LOCK_TIMEOUT = 5.0
 
 
 def get_process_state_path():
-    """Get path to active_processes.json."""
-    data_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
+    """Get path to active_processes.json.
+
+    Checks multiple sources for the data path:
+    1. APPLIO_DATA_PATH environment variable
+    2. runtime_paths.json (written by wrapper)
+    3. Default ~/Applio
+    """
+    # First check environment variable
+    data_path = os.environ.get("APPLIO_DATA_PATH")
+    if data_path:
+        return os.path.join(data_path, ".applio", "active_processes.json")
+
+    # Check runtime_paths.json (written by wrapper at startup)
+    runtime_config_paths = [
+        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
+        os.path.expanduser("~/.applio/runtime_paths.json"),
+    ]
+    for config_path in runtime_config_paths:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    data_path = config.get("data_path")
+                    if data_path:
+                        return os.path.join(data_path, ".applio", "active_processes.json")
+            except (json.JSONDecodeError, IOError):
+                pass
+
+    # Fallback to default
+    data_path = os.path.expanduser("~/Applio")
     return os.path.join(data_path, ".applio", "active_processes.json")
 
 
@@ -535,32 +563,117 @@ class ProgressWindowController:
         self.relaunch_btn.setAccessibilityIdentifier_("relaunch_button")
         self.window.contentView().addSubview_(self.relaunch_btn)
 
-        # Start elapsed time timer
-        self._start_timer()
+        # Start background file polling thread
+        self._file_thread = None
+        self._file_queue = None
+        self._start_file_thread()
+        self._start_timer()  # Start timer to process queue updates
+
+    def _start_file_thread(self):
+        """Start background thread for file polling."""
+        import threading
+        import queue
+
+        self._file_queue = queue.Queue()
+        self._file_thread = threading.Thread(target=self._file_poll_worker, daemon=True)
+        self._file_thread.start()
+
+    def _file_poll_worker(self):
+        """Background worker thread for file polling."""
+        MAX_INITIAL_LINES = 50  # Only show last 50 lines on initial read
+
+        while True:
+            time.sleep(0.5)  # Poll every 500ms
+
+            if not self.log_file_path or not os.path.exists(self.log_file_path):
+                continue
+
+            try:
+                current_size = os.path.getsize(self.log_file_path)
+                if current_size > self._last_file_size:
+                    with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
+                        # If this is the first read (position 0), only read last portion
+                        if self._last_file_pos == 0 and current_size > 0:
+                            # Read from end of file, limiting to ~50 lines
+                            # Estimate ~200 bytes per line on average
+                            estimated_start = max(0, current_size - (MAX_INITIAL_LINES * 200))
+                            f.seek(estimated_start)
+                            content = f.read()
+                            # Skip partial first line (we started mid-file)
+                            if estimated_start > 0 and content:
+                                first_newline = content.find('\n')
+                                if first_newline >= 0:
+                                    content = content[first_newline + 1:]
+                            lines = content.splitlines()
+                        else:
+                            # Normal incremental read
+                            f.seek(self._last_file_pos)
+                            content = f.read()
+                            lines = content.splitlines()
+
+                        self._last_file_pos = f.tell()
+                        self._last_file_size = current_size
+
+                        # Parse lines and queue updates
+                        for line in lines:
+                            if line.strip():
+                                # Parse epoch progress
+                                self._parse_epoch_progress_bg(line)
+                                # Queue log line for main thread
+                                self._file_queue.put(("log_line", line))
+            except Exception as e:
+                logging.warning(f"[ProgressWindow] Error in file poll worker: {e}")
+
+    def _parse_epoch_progress_bg(self, line):
+        """Parse epoch progress in background thread (no UI updates)."""
+        if not self._total_epoch:
+            return
+
+        import re
+        match = re.search(r'[Ee]poch[:\s]*(\d+)\s*/\s*(\d+)', line)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            if total > 0 and current <= total:
+                self._current_epoch = current
+                if not self._total_epoch:
+                    self._total_epoch = total
+                # Queue progress update for main thread
+                self._file_queue.put(("progress", {"current": current, "total": total}))
 
     def _start_timer(self):
-        """Start the elapsed time update timer."""
+        """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
         self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            1.0, self, "updateElapsedTime:", None, True
+            0.5, self, "processQueueUpdates:", None, True
         )
 
-    def updateElapsedTime_(self, timer):
-        """Update elapsed time display and progress bar."""
+    def processQueueUpdates_(self, timer):
+        """Process pending updates from background thread (runs on main thread)."""
+        # Update elapsed time
         elapsed = datetime.datetime.now() - self.start_time
         hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
         self.time_label.setStringValue_(f"Elapsed: {hours:02d}:{minutes:02d}:{seconds:02d}")
 
-        # Update progress bar with epoch info if available
-        if self._total_epoch and self._current_epoch:
-            self.progress_bar.setDoubleValue_(self._current_epoch)
-            self.progress_bar.setAccessibilityHelp_(
-                f"Training progress: {self._current_epoch} of {self._total_epoch} epochs"
-            )
+        # Process all pending updates from queue
+        updates_processed = 0
+        while updates_processed < 20:  # Limit to prevent blocking
+            try:
+                update_type, data = self._file_queue.get(block=False)
+                updates_processed += 1
 
-        # Also poll log file
-        self.pollLogFile_(None)
+                if update_type == "log_line":
+                    self._add_log_line(data)
+                elif update_type == "progress":
+                    self._current_epoch = data["current"]
+                    self._total_epoch = data["total"]
+                    self.progress_bar.setDoubleValue_(data["current"])
+                    self.progress_bar.setAccessibilityHelp_(
+                        f"Training progress: {data['current']} of {data['total']} epochs"
+                    )
+            except:
+                break  # Queue empty
 
         # Check if process still running (with PID recycling protection)
         pid = self.process_info.get("pid")
@@ -573,29 +686,7 @@ class ProgressWindowController:
                     self.progress_bar.setDoubleValue_(self._total_epoch)
                 else:
                     self.progress_bar.stopAnimation_(None)
-                # Accessibility announcement for completion
                 _announce_for_accessibility(self.status_label, f"{self.process_type.capitalize()} process completed")
-
-    def pollLogFile_(self, timer):
-        """Poll log file for new content and parse epoch progress."""
-        if not self.log_file_path or not os.path.exists(self.log_file_path):
-            return
-
-        try:
-            current_size = os.path.getsize(self.log_file_path)
-            if current_size > self._last_file_size:
-                with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
-                    f.seek(self._last_file_pos)
-                    new_content = f.read()
-                    self._last_file_pos = f.tell()
-                    self._last_file_size = current_size
-
-                    for line in new_content.splitlines():
-                        self._add_log_line(line)
-                        # Parse epoch progress from log lines
-                        self._parse_epoch_progress(line)
-        except Exception as e:
-            logging.warning(f"[ProgressWindow] Error tailing log: {e}")
 
     def _parse_epoch_progress(self, line):
         """Parse epoch progress from log line and update progress bar."""
@@ -620,47 +711,66 @@ class ProgressWindowController:
                 )
 
     def _add_log_line(self, line):
-        """Add a line to the log view using incremental text storage update."""
+        """Add a line to the log view with buffer limit to prevent slowdowns."""
+        MAX_LOG_LINES = 100  # Limit to prevent performance issues
+
         self.log_lines.append(line)
 
-        # Use textStorage for incremental updates (better for VoiceOver)
-        # This appends to the end instead of replacing entire content
-        text_storage = self.log_view.textStorage()
-        current_length = text_storage.length()
+        # Trim old lines if buffer is too large
+        if len(self.log_lines) > MAX_LOG_LINES:
+            # Remove oldest lines and update text storage
+            lines_to_remove = len(self.log_lines) - MAX_LOG_LINES
+            self.log_lines = self.log_lines[lines_to_remove:]
 
-        # Add newline if not first line
-        if current_length > 0 and not text_storage.string().endswith("\n"):
+            # Reset text storage with trimmed content (batch update)
+            text_storage = self.log_view.textStorage()
+            text_storage.beginEditing()
+            text_storage.deleteCharactersInRange_((0, text_storage.length()))
+            text_storage.appendString_("\n".join(self.log_lines))
+            text_storage.endEditing()
+        else:
+            # Incremental update for small additions
+            text_storage = self.log_view.textStorage()
+            current_length = text_storage.length()
+
+            # Add newline if not first line
+            if current_length > 0 and not text_storage.string().endswith("\n"):
+                text_storage.replaceCharactersInRange_withString_(
+                    (current_length, 0), "\n"
+                )
+                current_length += 1
+
+            # Append new line
             text_storage.replaceCharactersInRange_withString_(
-                (current_length, 0), "\n"
+                (current_length, 0), line
             )
-            current_length += 1
 
-        # Append new line
-        text_storage.replaceCharactersInRange_withString_(
-            (current_length, 0), line
-        )
-
-        # Scroll to bottom using proper method
-        self.log_view.scrollRangeToVisible_(
-            (text_storage.length(), 0)
-        )
+        # Scroll to bottom only every 5 lines to reduce overhead
+        if len(self.log_lines) % 5 == 0:
+            text_storage = self.log_view.textStorage()
+            self.log_view.scrollRangeToVisible_(
+                (text_storage.length(), 0)
+            )
 
     def show(self):
         """Show the window and start log tailing."""
+        # Activate the application to ensure it receives events
+        from AppKit import NSApplication, NSApplicationActivationPolicyRegular
+        app = NSApplication.sharedApplication()
+        app.activateIgnoringOtherApps_(True)
+
         self.window.makeKeyAndOrderFront_(None)
         logging.info(f"[ProgressWindow] Showing window for {self.process_type}")
 
-        # Initial log read
+        # Initial log read - queue to background thread instead of blocking main thread
+        # The background thread will pick up existing content on first poll
         if self.log_file_path and os.path.exists(self.log_file_path):
             try:
-                with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                    self._last_file_pos = f.tell()
-                    self._last_file_size = os.path.getsize(self.log_file_path)
-                    for line in content.splitlines()[-50:]:  # Last 50 lines
-                        self._add_log_line(line)
+                # Just set the file position to 0 so background thread reads from start
+                self._last_file_pos = 0
+                self._last_file_size = 0
             except Exception as e:
-                logging.warning(f"[ProgressWindow] Error reading initial log: {e}")
+                logging.warning(f"[ProgressWindow] Error setting initial file position: {e}")
 
     def terminateProcess_(self, sender):
         """Terminate the process."""
@@ -784,7 +894,7 @@ class ApplioLauncher:
 
         # 5. Run event loop
         logging.info("[Launcher] Starting event loop")
-        AppHelper.runConsoleEventLoop(installInterrupt=True)
+        AppHelper.runEventLoop(installInterrupt=True)
 
     def _setup_signal_handlers(self):
         """Setup signal handlers."""
@@ -996,10 +1106,59 @@ class ApplioLauncher:
         """Periodic menu state update."""
         self._update_menu_state()
 
+    def _check_wrapper_window_hidden(self):
+        """Check if wrapper window was hidden (Keep Running clicked).
+
+        Returns True if wrapper_window_visible is False in runtime config.
+        Also resets the flag to True to prevent repeated triggers.
+        """
+        import json
+
+        config_locations = [
+            os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
+            os.path.expanduser("~/.applio/runtime_paths.json"),
+        ]
+
+        for config_path in config_locations:
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r") as f:
+                        config = json.load(f)
+
+                    # Check if wrapper window was hidden
+                    if config.get("wrapper_window_visible") is False:
+                        logging.info("[Launcher] Detected wrapper window hidden, showing progress window")
+
+                        # Reset the flag to prevent repeated triggers
+                        config["wrapper_window_visible"] = True
+                        temp_path = config_path + ".tmp"
+                        with open(temp_path, "w") as f:
+                            json.dump(config, f, indent=2)
+                        os.rename(temp_path, config_path)
+
+                        return True
+                except Exception as e:
+                    logging.warning(f"[Launcher] Failed to check runtime config: {e}")
+
+        return False
+
     def _update_menu_state(self):
         """Update menu item states based on running processes."""
         if not self.progress_menu_item:
             return
+
+        # Check if wrapper window was hidden - if so, show progress window
+        if self._check_wrapper_window_hidden():
+            active = get_active_processes()
+            logging.info(f"[Launcher] Wrapper hidden detected, found {len(active)} active processes")
+            if active:
+                try:
+                    self._show_progress_window_for_processes(active)
+                    logging.info("[Launcher] Progress window creation completed")
+                except Exception as e:
+                    logging.error(f"[Launcher] Failed to show progress window: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         active = get_active_processes()
         has_active = len(active) > 0
@@ -1133,22 +1292,28 @@ class ApplioLauncher:
 
     def _show_progress_window_for_processes(self, processes):
         """Show progress window for the first active process."""
+        logging.info(f"[Launcher] _show_progress_window_for_processes called with {len(processes)} processes")
         if not processes:
+            logging.info("[Launcher] No processes to show, returning early")
             return
 
         # Clean up existing progress window before creating new one
         if self.progress_window:
+            logging.info("[Launcher] Cleaning up existing progress window")
             self.progress_window._cleanup()
             if self.progress_window.window:
                 self.progress_window.window.close()
             self.progress_window = None
 
         proc = processes[0]
+        logging.info(f"[Launcher] Creating ProgressWindowController for {proc['type']}: {proc.get('model_name', 'Unknown')}")
         self.progress_window = ProgressWindowController(
             proc["type"],
             {k: v for k, v in proc.items() if k != "type"}
         )
+        logging.info("[Launcher] Calling progress_window.show()")
         self.progress_window.show()
+        logging.info("[Launcher] progress_window.show() completed")
 
     def _cleanup(self):
         """Clean up on exit."""
