@@ -134,10 +134,14 @@ def _detect_phase_name(self, line):
 
     Looks for patterns like:
     - "Starting preprocessing..."
+    - "[11:02:15] Starting preprocessing..."
     - "Preprocessing audio files..."
     - "Extracting features..."
     """
     import re
+
+    # Strip timestamp prefix if present (e.g., "[11:02:15] ")
+    stripped = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]\s*', '', line)
 
     # Common phase patterns
     phase_patterns = [
@@ -147,7 +151,7 @@ def _detect_phase_name(self, line):
     ]
 
     for pattern in phase_patterns:
-        match = re.search(pattern, line, re.IGNORECASE)
+        match = re.search(pattern, stripped, re.IGNORECASE)
         if match:
             phase = match.group(1).capitalize()
             # Normalize common variations
@@ -181,7 +185,15 @@ git commit -m "feat(smart-log): add phase name detection from log lines"
 **Files:**
 - Modify: `applio_launcher.py:400-480` (_create_ui method)
 
-**Step 1: Add live zone UI creation**
+**Step 1: Adjust log view height to make room for live zone**
+
+In `_create_ui`, find the line `log_height = 250` and change it to `log_height = 216` (reduce by 34px for live zone + separators):
+
+```python
+log_height = 216  # Reduced from 250 to make room for live zone
+```
+
+**Step 2: Add live zone UI creation**
 
 In `_create_ui`, after progress bar creation (around line 480, after `y -= 30`):
 
@@ -199,7 +211,7 @@ LIVE_ZONE_HEIGHT = 24
 self.live_zone = NSTextField.alloc().initWithFrame_(
     NSMakeRect(padding, y - LIVE_ZONE_HEIGHT, window_width - 2*padding, LIVE_ZONE_HEIGHT)
 )
-self.live_zone.setStringValue_("")  # Empty until tqdm detected
+self.live_zone.setStringValue_("Waiting for progress...")  # Placeholder until tqdm detected
 self.live_zone.setBezeled_(False)
 self.live_zone.setDrawsBackground_(True)
 self.live_zone.setBackgroundColor_(NSColor.controlBackgroundColor())
@@ -319,9 +331,12 @@ After `_update_live_zone` method:
 
 ```python
 def _log_phase_completion(self):
-    """Log the completion of the current phase."""
+    """Log the completion of the current phase.
+
+    Returns True if a phase was logged, False if no phase was active.
+    """
     if not self._live_phase or not self._live_phase_start:
-        return
+        return False
 
     # Calculate duration
     duration = datetime.datetime.now() - self._live_phase_start
@@ -343,18 +358,31 @@ def _log_phase_completion(self):
     # Clear phase tracking
     self._live_phase = None
     self._live_phase_start = None
+    return True
 ```
 
-**Step 2: Verify syntax**
+**Step 2: Add live zone state reset to _cleanup()**
+
+In `_cleanup()` method, add reset of live zone state (find existing cleanup code):
+
+```python
+# Reset smart log display state
+self._live_phase = None
+self._live_phase_start = None
+self._last_tqdm_time = None
+self._last_non_tqdm_line = ""
+```
+
+**Step 3: Verify syntax**
 
 Run: `python3 -c "import ast; ast.parse(open('applio_launcher.py').read())"`
 Expected: No output (valid syntax)
 
-**Step 3: Commit**
+**Step 4: Commit**
 
 ```bash
 git add applio_launcher.py
-git commit -m "feat(smart-log): add phase completion logging with duration"
+git commit -m "feat(smart-log): add phase completion logging with duration and cleanup"
 ```
 
 ---
@@ -450,10 +478,13 @@ if self._last_tqdm_time and self._live_phase:
     elapsed = (datetime.datetime.now() - self._last_tqdm_time).total_seconds()
     if elapsed > 2.0:
         # Phase likely complete - log completion and clear live zone
-        self._log_phase_completion()
-        self.live_zone.setStringValue_("")
+        # _log_phase_completion returns True only if a phase was active
+        if self._log_phase_completion():
+            self.live_zone.setStringValue_("Waiting for progress...")
         self._last_tqdm_time = None
 ```
+
+Note: `_log_phase_completion()` now returns True/False to prevent double-logging. The timeout check only updates the live zone if a phase was actually logged.
 
 **Step 3: Verify syntax**
 
