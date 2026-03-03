@@ -646,6 +646,57 @@ class ProgressWindowController:
                 # Queue progress update for main thread
                 self._file_queue.put(("progress", {"current": current, "total": total}))
 
+    def _is_tqdm_line(self, line):
+        """Check if line is a tqdm progress bar update."""
+        import re
+        # Match patterns like: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
+        return bool(re.match(r'^\s*\d+%\|.*\|\s*\d+/\d+\s*\[', line))
+
+    def _parse_tqdm_line(self, line):
+        """Extract progress info from tqdm line.
+
+        Returns dict with: percent, current, total, eta, rate, rate_unit
+        or None if parsing fails.
+        """
+        import re
+        # Pattern: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
+        match = re.match(
+            r'^\s*(\d+)%\|.*\|\s*(\d+)/(\d+)\s*\[([^\]]+)\]',
+            line
+        )
+        if not match:
+            return None
+
+        percent = int(match.group(1))
+        current = int(match.group(2))
+        total = int(match.group(3))
+        bracket_content = match.group(4)
+
+        # Parse bracket content: "00:18<04:36,  1.16it/s" or "00:18<04:36,  5.38s/it"
+        eta = None
+        rate = None
+        rate_unit = None
+
+        # Extract ETA (after <)
+        eta_match = re.search(r'<\s*([\d:]+)', bracket_content)
+        if eta_match:
+            eta = eta_match.group(1)
+
+        # Extract rate (after comma or at end)
+        rate_match = re.search(r'([\d.]+)\s*(it/s|s/it)', bracket_content)
+        if rate_match:
+            rate = float(rate_match.group(1))
+            rate_unit = rate_match.group(2)
+
+        return {
+            'percent': percent,
+            'current': current,
+            'total': total,
+            'eta': eta,
+            'rate': rate,
+            'rate_unit': rate_unit
+        }
+
     def _start_timer(self):
         """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
