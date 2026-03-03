@@ -613,7 +613,7 @@ class ProgressWindowController:
             NSMakeRect(0, 0, window_width - 2*padding - 20, log_height)
         )
         self.log_view.setEditable_(False)
-        self.log_view.setFont_(NSFont.systemFontOfSize_(11))
+        self.log_view.setFont_(NSFont.fontWithName_size_("Menlo", 11))
         self.log_view.setString_("Waiting for log output...")
         # Accessibility - enable explicitly and set attributes
         self.log_view.setAccessibilityEnabled_(True)
@@ -1017,7 +1017,12 @@ class ProgressWindowController:
                 # Phase likely complete - log completion and clear live zone
                 # _log_phase_completion returns True only if a phase was active
                 if self._log_phase_completion():
-                    self.live_zone.setStringValue_("Waiting for progress...")
+                    # Reset Rich Status Card to waiting state
+                    self.phase_label.setStringValue_("Waiting for progress...")
+                    self.visual_progress.setStringValue_("░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░")
+                    self.progress_percent.setStringValue_("0%")
+                    for val in self.stats_values:
+                        val.setStringValue_("--")
                 self._last_tqdm_time = None
 
     def _parse_epoch_progress(self, line):
