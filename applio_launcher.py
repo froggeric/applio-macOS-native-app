@@ -769,6 +769,39 @@ class ProgressWindowController:
 
         return None
 
+    def _update_live_zone(self, tqdm_data, phase_name=None):
+        """Update the live zone display with current tqdm progress."""
+        if phase_name and phase_name != self._live_phase:
+            # Phase changed - log completion of previous phase
+            if self._live_phase and self._live_phase_start:
+                self._log_phase_completion()
+            # Start new phase
+            self._live_phase = phase_name
+            self._live_phase_start = datetime.datetime.now()
+            # Log phase start
+            total_label = "files" if "preprocess" in phase_name.lower() else "items"
+            self._add_log_line(f"{phase_name} started ({tqdm_data['total']} {total_label})")
+
+        # Build display string
+        phase = self._live_phase or "Processing"
+        current = tqdm_data['current']
+        total = tqdm_data['total']
+        total_label = "files" if "preprocess" in phase.lower() else "items"
+
+        parts = [f"  {phase}: {current}/{total} {total_label}"]
+
+        if tqdm_data.get('eta'):
+            parts.append(f"ETA: {tqdm_data['eta']}")
+
+        if tqdm_data.get('rate'):
+            parts.append(f"{tqdm_data['rate']:.2f}{tqdm_data['rate_unit']}")
+
+        display_text = "  |  ".join(parts)
+        self.live_zone.setStringValue_(display_text)
+
+        # Update last activity time
+        self._last_tqdm_time = datetime.datetime.now()
+
     def _start_timer(self):
         """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
