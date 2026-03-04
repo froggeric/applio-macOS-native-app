@@ -143,7 +143,6 @@ if len(sys.argv) > 1:
 # 3. Constants & Configuration
 # =================================================================
 PROCESS_STATE_FILE = os.path.expanduser("~/.applio/active_processes.json")
-LOG_TAIL_INTERVAL = 0.5  # seconds
 
 # Logging setup
 log_dir = os.path.expanduser("~/Library/Logs/Applio")
@@ -221,48 +220,78 @@ def _release_file_lock(lock_file):
         pass
 
 
-def load_process_state():
-    """Load process state from file with locking."""
+def load_process_state(retry_on_lock_fail=True):
+    """Load process state from file with locking.
+
+    Args:
+        retry_on_lock_fail: If True, returns empty state on lock failure.
+                           If False, raises IOError on lock failure.
+    """
     path = get_process_state_path()
     if not os.path.exists(path):
         return {"version": 1, "processes": {}}
 
     lock_path = path + ".lock"
+    lock_file = None
     try:
-        # Use "a" mode to avoid truncating before lock is acquired
-        with open(lock_path, "a") as lock_file:
-            if not _acquire_file_lock(lock_file):
-                logging.warning("[Launcher] Could not acquire lock for reading, proceeding anyway")
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            finally:
-                _release_file_lock(lock_file)
+        # Use "a+" mode to create if needed, read+write, without truncating
+        lock_file = open(lock_path, "a+")
+        if not _acquire_file_lock(lock_file):
+            if retry_on_lock_fail:
+                logging.warning("[Launcher] Could not acquire lock for reading, returning empty state")
+                return {"version": 1, "processes": {}}
+            else:
+                raise IOError(f"Could not acquire lock for {path} within timeout")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        finally:
+            _release_file_lock(lock_file)
     except (json.JSONDecodeError, IOError) as e:
         logging.warning(f"[Launcher] Error reading process state: {e}")
         return {"version": 1, "processes": {}}
+    finally:
+        if lock_file:
+            try:
+                lock_file.close()
+            except:
+                pass
 
 
-def save_process_state(state):
-    """Save process state to file with locking."""
+def save_process_state(state) -> bool:
+    """Save process state to file with locking.
+
+    Returns:
+        True if save succeeded, False if lock could not be acquired.
+    """
     path = get_process_state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     lock_path = path + ".lock"
+    lock_file = None
     try:
-        # Use "a" mode to avoid truncating before lock is acquired
-        with open(lock_path, "a") as lock_file:
-            if not _acquire_file_lock(lock_file):
-                logging.warning("[Launcher] Could not acquire lock for writing, proceeding anyway")
-            try:
-                temp = path + ".tmp"
-                with open(temp, "w", encoding="utf-8") as f:
-                    json.dump(state, f, indent=2)
-                os.rename(temp, path)
-            finally:
-                _release_file_lock(lock_file)
+        # Use "a+" mode to create if needed, read+write, without truncating
+        lock_file = open(lock_path, "a+")
+        if not _acquire_file_lock(lock_file):
+            logging.error("[Launcher] Could not acquire lock for writing, state NOT saved")
+            return False
+        try:
+            temp = path + ".tmp"
+            with open(temp, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            os.rename(temp, path)
+            return True
+        finally:
+            _release_file_lock(lock_file)
     except IOError as e:
         logging.error(f"[Launcher] Error saving process state: {e}")
+        return False
+    finally:
+        if lock_file:
+            try:
+                lock_file.close()
+            except:
+                pass
 
 
 def verify_process_identity(pid, expected_start_time=None):
@@ -369,6 +398,10 @@ class ProgressWindowController:
         self._total_epoch = process_info.get('total_epoch')
         self._current_epoch = 0
         self.window = None  # Initialize to None for safe cleanup
+        # Thread safety and file tracking
+        self._shutdown_event = threading.Event()  # Graceful shutdown signal
+        self._state_lock = threading.Lock()       # Protect shared state
+        self._file_inode = None                   # Track inode for rotation detection
 
         # Log file path
         self.log_file_path = process_info.get("log_file")
@@ -402,6 +435,14 @@ class ProgressWindowController:
             "windowWillClose:",
             "NSWindowWillCloseNotification",
             self.window
+        )
+
+        # Also observe app termination as safety net for timer cleanup
+        self._terminate_observer = notification_center.addObserver_selector_name_object_(
+            self,
+            "applicationWillTerminate:",
+            "NSApplicationWillTerminateNotification",
+            None
         )
 
     def _create_ui(self):
@@ -702,18 +743,39 @@ class ProgressWindowController:
         """Background worker thread for file polling."""
         MAX_INITIAL_LINES = 50  # Only show last 50 lines on initial read
 
-        while True:
+        while not self._shutdown_event.is_set():
             time.sleep(0.5)  # Poll every 500ms
+
+            if self._shutdown_event.is_set():
+                break
 
             if not self.log_file_path or not os.path.exists(self.log_file_path):
                 continue
 
             try:
-                current_size = os.path.getsize(self.log_file_path)
+                # Check for file rotation via inode
+                file_stat = os.stat(self.log_file_path)
+                current_inode = file_stat.st_ino
+                current_size = file_stat.st_size
+
+                with self._state_lock:
+                    # Detect rotation (inode changed) or truncation (size < pos)
+                    if self._file_inode is not None and (
+                        current_inode != self._file_inode or
+                        current_size < self._last_file_pos
+                    ):
+                        # File was rotated or truncated - reset position
+                        self._last_file_pos = 0
+                        self._last_file_size = 0
+                    self._file_inode = current_inode
+
                 if current_size > self._last_file_size:
                     with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
                         # If this is the first read (position 0), only read last portion
-                        if self._last_file_pos == 0 and current_size > 0:
+                        with self._state_lock:
+                            last_pos = self._last_file_pos
+
+                        if last_pos == 0 and current_size > 0:
                             # Read from end of file, limiting to ~50 lines
                             # Estimate ~200 bytes per line on average
                             estimated_start = max(0, current_size - (MAX_INITIAL_LINES * 200))
@@ -727,12 +789,15 @@ class ProgressWindowController:
                             lines = content.splitlines()
                         else:
                             # Normal incremental read
-                            f.seek(self._last_file_pos)
+                            f.seek(last_pos)
                             content = f.read()
                             lines = content.splitlines()
 
-                        self._last_file_pos = f.tell()
-                        self._last_file_size = current_size
+                        new_pos = f.tell()
+
+                        with self._state_lock:
+                            self._last_file_pos = new_pos
+                            self._last_file_size = current_size
 
                         # Parse lines and queue updates
                         for line in lines:
@@ -745,15 +810,20 @@ class ProgressWindowController:
                                 tqdm_data = self._parse_tqdm_line(line)
                                 if tqdm_data:
                                     # Detect phase from previous non-tqdm line
-                                    phase_name = self._detect_phase_name(self._last_non_tqdm_line)
+                                    with self._state_lock:
+                                        last_line = self._last_non_tqdm_line
+                                    phase_name = self._detect_phase_name(last_line)
                                     self._file_queue.put(("tqdm", {"data": tqdm_data, "phase": phase_name}))
                             else:
                                 # Non-tqdm line - store for phase detection and queue for logging
-                                self._last_non_tqdm_line = line
+                                with self._state_lock:
+                                    self._last_non_tqdm_line = line
                                 # Parse epoch progress (for progress bar)
                                 self._parse_epoch_progress_bg(line)
                                 # Queue log line for main thread
                                 self._file_queue.put(("log_line", line))
+            except OSError as e:
+                logging.warning(f"[ProgressWindow] File access error in poll worker: {e}")
             except Exception as e:
                 logging.warning(f"[ProgressWindow] Error in file poll worker: {e}")
 
@@ -994,10 +1064,19 @@ class ProgressWindowController:
                         f"Training progress: Epoch {data['current']} of {data['total']}"
                     )
             except queue.Empty:
-                break  # Queue empty
+                break  # Queue empty - expected, not an error
+            except (KeyError, TypeError) as e:
+                # Data format errors - log and continue with next item
+                logging.warning(f"[ProgressWindow] Malformed queue data: {e}")
+                continue
+            except AttributeError as e:
+                # Code bugs (typos in attribute names) - re-raise to surface during development
+                logging.critical(f"[ProgressWindow] AttributeError (possible typo): {e}")
+                raise
             except Exception as e:
-                logging.error(f"[ProgressWindow] Error processing queue update: {e}")
-                break
+                # Unexpected errors - log and continue (don't break the entire UI)
+                logging.error(f"[ProgressWindow] Unexpected error processing queue: {e}")
+                continue
 
         # Check if process still running (with PID recycling protection)
         pid = self.process_info.get("pid")
@@ -1026,28 +1105,6 @@ class ProgressWindowController:
                     for val in self.stats_values:
                         val.setStringValue_("--")
                 self._last_tqdm_time = None
-
-    def _parse_epoch_progress(self, line):
-        """Parse epoch progress from log line and update progress bar."""
-        if not self._total_epoch:
-            return
-
-        import re
-        # Match patterns like "Epoch 1/100" or "epoch 1/100" or "Epoch: 1/100"
-        match = re.search(r'[Ee]poch[:\s]*(\d+)\s*/\s*(\d+)', line)
-        if match:
-            current = int(match.group(1))
-            total = int(match.group(2))
-            if total > 0 and current <= total:
-                self._current_epoch = current
-                if not self._total_epoch:
-                    self._total_epoch = total
-                # Update progress bar
-                self.progress_bar.setDoubleValue_(current)
-                # Update accessibility
-                self.progress_bar.setAccessibilityHelp_(
-                    f"Training progress: Epoch {current} of {total}"
-                )
 
     def _add_log_line(self, line):
         """Add a line to the log view with buffer limit to prevent slowdowns."""
@@ -1184,19 +1241,34 @@ class ProgressWindowController:
         """Handle window close."""
         self._cleanup()
 
+    def applicationWillTerminate_(self, notification):
+        """Handle application termination - ensure cleanup."""
+        self._cleanup()
+
     def _cleanup(self):
         """Clean up resources."""
+        # Signal background thread to stop
+        if hasattr(self, '_shutdown_event'):
+            self._shutdown_event.set()
+
         if self.timer:
             self.timer.invalidate()
             self.timer = None
         if self._observer:
             NSNotificationCenter.defaultCenter().removeObserver_(self._observer)
             self._observer = None
+        if hasattr(self, '_terminate_observer') and self._terminate_observer:
+            NSNotificationCenter.defaultCenter().removeObserver_(self._terminate_observer)
+            self._terminate_observer = None
         # Reset smart log display state
         self._live_phase = None
         self._live_phase_start = None
         self._last_tqdm_time = None
         self._last_non_tqdm_line = ""
+
+        # Wait for background thread to finish (with timeout)
+        if hasattr(self, '_file_thread') and self._file_thread and self._file_thread.is_alive():
+            self._file_thread.join(timeout=1.0)
 
 
 # =================================================================
