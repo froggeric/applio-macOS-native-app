@@ -34,6 +34,13 @@ import time
 from pathlib import Path
 from collections import deque
 
+# Optional psutil for process verification
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 # macOS native APIs
 try:
     from AppKit import (
@@ -143,6 +150,10 @@ if len(sys.argv) > 1:
 # 3. Constants & Configuration
 # =================================================================
 PROCESS_STATE_FILE = os.path.expanduser("~/.applio/active_processes.json")
+
+# UI update constants
+LOG_SCROLL_INTERVAL = 5        # Scroll log view every N lines to reduce UI overhead
+MAX_QUEUE_ITEMS_PER_TICK = 20  # Max queue items to process per timer tick
 
 # Logging setup
 log_dir = os.path.expanduser("~/Library/Logs/Applio")
@@ -308,7 +319,8 @@ def verify_process_identity(pid, expected_start_time=None):
     Returns:
         bool: True if process exists AND is the same process we started
     """
-    import psutil
+    if not PSUTIL_AVAILABLE:
+        return True  # Assume valid if can't verify
 
     if not pid:
         return False
@@ -339,7 +351,6 @@ def verify_process_identity(pid, expected_start_time=None):
 
 def validate_process_state(state):
     """Remove stale entries where process has died (with PID recycling protection)."""
-    import psutil
     cleaned = False
 
     for process_type, info in list(state.get("processes", {}).items()):
@@ -870,6 +881,10 @@ class ProgressWindowController:
         total = int(match.group(3))
         bracket_content = match.group(4)
 
+        # Validate parsed values
+        if not (0 <= percent <= 100) or current < 0 or total <= 0 or current > total:
+            return None
+
         # Parse bracket content: "00:18<04:36,  1.16it/s" or "00:18<04:36,  5.38s/it"
         eta = None
         rate = None
@@ -1047,7 +1062,7 @@ class ProgressWindowController:
 
         # Process all pending updates from queue
         updates_processed = 0
-        while updates_processed < 20:  # Limit to prevent blocking
+        while updates_processed < MAX_QUEUE_ITEMS_PER_TICK:
             try:
                 update_type, data = self._file_queue.get(block=False)
                 updates_processed += 1
@@ -1141,8 +1156,8 @@ class ProgressWindowController:
                 (current_length, 0), line
             )
 
-        # Scroll to bottom only every 5 lines to reduce overhead
-        if len(self.log_lines) % 5 == 0:
+        # Scroll to bottom only every N lines to reduce overhead
+        if len(self.log_lines) % LOG_SCROLL_INTERVAL == 0:
             text_storage = self.log_view.textStorage()
             self.log_view.scrollRangeToVisible_(
                 (text_storage.length(), 0)
@@ -1170,10 +1185,13 @@ class ProgressWindowController:
 
     def terminateProcess_(self, sender):
         """Terminate the process."""
+        if not PSUTIL_AVAILABLE:
+            logging.warning("[ProgressWindow] Cannot terminate - psutil not available")
+            return
+
         pid = self.process_info.get("pid")
         started_at = self.process_info.get("started_at")
         if pid and verify_process_identity(pid, started_at):
-            import psutil
             try:
                 psutil.Process(pid).terminate()
                 self.status_label.setStringValue_("Status: Terminated")
@@ -1709,6 +1727,12 @@ class ApplioLauncher:
     def _show_progress_window_for_processes(self, processes):
         """Show progress window for the first active process."""
         logging.info(f"[Launcher] _show_progress_window_for_processes called with {len(processes)} processes")
+
+        # Warn if multiple processes active (only showing first)
+        if len(processes) > 1:
+            process_types = [p['type'] for p in processes]
+            logging.warning(f"[Launcher] {len(processes)} processes active ({process_types}), only showing first ({processes[0]['type']})")
+
         if not processes:
             logging.info("[Launcher] No processes to show, returning early")
             return
