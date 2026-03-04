@@ -368,7 +368,7 @@ def on_window_closing():
 
     # User confirmed quit or no active processes - terminate active processes gracefully
     try:
-        from rvc.lib.tools.process_controller import ProcessController
+        # ProcessController is defined locally in this file (lines 193-265)
         terminated = ProcessController.terminate_all()
         if terminated:
             logging.info(f"[Window] Terminated {terminated} active processes")
