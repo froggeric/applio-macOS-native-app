@@ -158,14 +158,17 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 
 **Debugging Frozen Apps:**
 - Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
+- **Silent exception handling:** In multiprocessing spawn mode, stdout is lost. Use file-based logging (e.g., `~/Library/Logs/Applio/extraction_errors.log`)
 - Check `DEBUGGING_HISTORY.md` for documented debugging sessions and solutions
 - After fixes, verify build timestamp is AFTER commit timestamp: `stat -f "%Sm" dist/Applio.app/Contents/MacOS/Applio`
 - All fixes must go through `patches/` - NEVER modify upstream files directly
+- **After patching, verify `git status` shows no upstream files have patch markers.** If present, restore with `git checkout` before committing.
 - When stuck after 3+ fix attempts: STOP and question the architecture (per systematic-debugging skill)
 
 **Build process gotchas:**
 - Two entitlements files must stay in sync: `assets/entitlements.plist` (full) and `scripts/entitlements_dev_id.plist` (minimal for Developer ID)
 - No microphone entitlement needed - pywebview wrapper doesn't capture audio; Gradio handles it via browser
+- **Patcher escape sequences:** In triple-quoted strings, `\\n` produces literal newline. Use `chr(10)` for newlines in patched code.
 - Patches in `patches/` are applied to source files before PyInstaller, then source files are restored to pristine state
 - PyInstaller cleans `dist/` at start - never delete while builds running
 - Build size: ~850MB (~2GB downloads on first launch)
@@ -223,6 +226,9 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 **Patch idempotency pattern:**
 - Each patch function must check for its OWN specific marker (e.g., `if '_track_process("training"' in content`)
 - DO NOT use a shared `IDEMPOTENCY_MARKER` check that returns early - this prevents actual patches from being applied
+
+- **"dir" type patchers:** base_path is the directory containing the source file, use `os.path.join(base_path, "filename.py")` not the full path
+- **runtime_paths.json keys:** Uses `data_path` for the data directory (not `base_path`)
 
 **Version management:**
 - `macos_wrapper.py` reads VERSION dynamically from `assets/config.json` + BUILD_NUMBER
