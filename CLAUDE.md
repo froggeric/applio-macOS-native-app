@@ -156,6 +156,12 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - `build/` - PyInstaller intermediate files
 - `dist/` - Final `Applio.app` bundle
 
+**CRITICAL: Build environment:**
+- MUST run `build_macos.py` from within `venv_macos` - running outside produces broken app
+- Outside venv: PyObjC not bundled → runtime error "AppHelper is not defined"
+- Outside venv: "Hidden import 'xxx' not found" warnings for torch, gradio, etc.
+- Setup: `/opt/homebrew/bin/brew install python@3.10` then `/opt/homebrew/bin/python3.10 -m venv venv_macos`
+
 **Debugging Frozen Apps:**
 - Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
 - **Silent exception handling:** In multiprocessing spawn mode, stdout is lost. Use file-based logging (e.g., `~/Library/Logs/Applio/extraction_errors.log`)
