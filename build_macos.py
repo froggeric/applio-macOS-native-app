@@ -82,7 +82,7 @@ import PyInstaller.__main__
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-BUILD_NUMBER = 3  # Increment for each build
+BUILD_NUMBER = 4  # Increment for each build
 
 # Read version from assets/config.json
 def get_applio_version():
