@@ -49,3 +49,4 @@ pyinstaller>=6.3.0
 pyobjc-framework-AVFoundation
 pyobjc-framework-Cocoa
 psutil>=5.9.0
+Pillow>=10.0.0  # Required for icon conversion during build

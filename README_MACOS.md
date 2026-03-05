@@ -20,15 +20,17 @@ This directory contains the scripts to build Applio as a standalone native macOS
 /opt/homebrew/opt/python@3.10/bin/python3.10 -m venv venv_macos
 source venv_macos/bin/activate
 
-# 2. Install dependencies
+# 2. Install dependencies (includes PyObjC, PyInstaller, Pillow)
 pip install -r requirements_macos.txt
 
-# 3. Build the app
+# 3. Build the app (must run from within venv_macos)
 python build_macos.py
 
 # 4. Run
 open dist/Applio.app
 ```
+
+> **Important:** Always run `build_macos.py` from within `venv_macos`. Running outside the venv will produce "Hidden import not found" warnings and the resulting app will be missing runtime dependencies (PyObjC, torch, gradio, etc.).
 
 ### Option 2: Development Mode
 
@@ -427,6 +429,28 @@ Requires `setuptools<70`:
 ```bash
 pip install "setuptools<70"
 ```
+
+### Build shows "Hidden import 'xxx' not found" warnings
+
+This happens when building outside the virtual environment. Always build from within `venv_macos`:
+
+```bash
+source venv_macos/bin/activate
+python build_macos.py
+```
+
+### Build fails with "No module named 'requests'" or icon conversion error
+
+These dependencies are required for the build process. Ensure you've installed all requirements:
+
+```bash
+source venv_macos/bin/activate
+pip install -r requirements_macos.txt
+```
+
+### App fails with "AppHelper is not defined" or "Native APIs not available"
+
+PyObjC is not bundled correctly. This happens when building outside `venv_macos`. Rebuild from within the virtual environment where PyObjC is installed.
 
 ### No microphone access / silent recording failure
 
