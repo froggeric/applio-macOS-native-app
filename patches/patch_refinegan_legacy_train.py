@@ -4,9 +4,12 @@ Patch to add RefineGAN-Legacy architecture detection in train.py.
 This patch adds:
 1. A helper function `_detect_refinegan_legacy()` to detect legacy pretrained models
 2. Logic to re-instantiate net_g with RefineGAN-Legacy vocoder when legacy pretrained is detected
+3. Logic to re-instantiate net_d with DiscriminatorRLegacy when legacy pretrained is detected
 
 The legacy architecture (original RVC-Boss) differs from current Applio RefineGAN:
-and requires loading with a compatible vocoder implementation.
+- Generator: source_conv vs pre_conv, l_linear vs merge.0
+- Discriminator: (5,1) kernels vs (3,9), channel expansion vs constant channels
+and requires loading with compatible implementations.
 """
 
 import os
@@ -123,6 +126,39 @@ def _detect_refinegan_legacy(pretrain_path: str) -> bool:
                         net_g = net_g.cuda(device_id)
                     else:
                         net_g = net_g.to(device)
+
+                    # Also re-instantiate net_d with legacy discriminator
+                    from rvc.lib.algorithm.discriminators import MultiPeriodDiscriminator, DiscriminatorRLegacy
+                    net_d = MultiPeriodDiscriminator(
+                        config.model.use_spectral_norm,
+                        checkpointing=checkpointing,
+                        version="v3",
+                        disc_r_class=DiscriminatorRLegacy,
+                    )
+                    if torch.cuda.is_available():
+                        net_d = net_d.cuda(device_id)
+                    else:
+                        net_d = net_d.to(device)
+
+                    # Re-wrap with DDP if needed
+                    if n_gpus > 1 and device.type == "cuda":
+                        from torch.nn.parallel import DistributedDataParallel as DDP
+                        net_g = DDP(net_g, device_ids=[device_id])
+                        net_d = DDP(net_d, device_ids=[device_id])
+
+                    # Re-create optimizers for new model parameters
+                    optim_g = optimizer(
+                        net_g.parameters(),
+                        config.train.learning_rate,
+                        betas=config.train.betas,
+                        eps=config.train.eps,
+                    )
+                    optim_d = optimizer(
+                        net_d.parameters(),
+                        config.train.learning_rate * d_lr_coeff,
+                        betas=config.train.betas,
+                        eps=config.train.eps,
+                    )
 
                 ckpt = torch.load(pretrainG, map_location="cpu", weights_only=True)[
                     "model"

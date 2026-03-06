@@ -554,6 +554,7 @@ def pre_build_patch():
     # Patch dependencies: patch_name -> list of patches that must run BEFORE it
     PATCH_DEPENDENCIES = {
         "patches/patch_subprocess_validation.py": ["patches/patch_process_tracking.py"],
+        "patches/patch_refinegan_legacy_train.py": ["patches/patch_refinegan_legacy_discriminator.py"],
     }
 
     # Patches to apply: (patcher_path, source_file, description, patcher_type)
@@ -577,9 +578,11 @@ def pre_build_patch():
         ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
         ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
         ("patches/patch_extract_error_logging.py", "rvc/train/extract/extract.py", "extract.py - file-based error logging", "dir"),
+        # Discriminator patch - must come FIRST before train patch
+        ("patches/patch_refinegan_legacy_discriminator.py", "rvc/lib/algorithm/discriminators.py", "discriminators.py - DiscriminatorRLegacy support", "dir"),
+        ("patches/patch_refinegan_legacy_train.py", "rvc/train/train.py", "train.py - RefineGAN-Legacy architecture detection (UPDATED)", "dir"),
         ("patches/patch_refinegan_legacy.py", "rvc/lib/algorithm/synthesizers.py", "synthesizers.py - RefineGAN-Legacy vocoder support", "dir"),
-        ("patches/patch_refinegan_legacy_train.py", "rvc/train/train.py", "train.py - RefineGAN-Legacy architecture detection", "dir"),
-        ("patches/patch_refinegan_legacy_infer.py", "rvc/infer/infer.py", "infer.py - RefineGAN-Legacy architecture detection", "dir"),
+        ("patches/patch_refinegan_legacy_infer.py", "rvc/infer/infer.py", "infer.py - RefineGAN-Legacy architecture detection", "dir")
     ]
 
     # Validate patch order matches dependencies
