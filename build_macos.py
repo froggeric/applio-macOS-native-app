@@ -577,6 +577,9 @@ def pre_build_patch():
         ("patches/patch_train_44100.py", "tabs/train/train.py", "tabs/train/train.py - 44100 Hz support", "file"),
         ("patches/patch_multiprocessing.py", "rvc/train/extract/extract.py", "extract.py - multiprocessing safety", "file"),
         ("patches/patch_extract_error_logging.py", "rvc/train/extract/extract.py", "extract.py - file-based error logging", "dir"),
+        ("patches/patch_refinegan_legacy.py", "rvc/lib/algorithm/synthesizers.py", "synthesizers.py - RefineGAN-Legacy vocoder support", "dir"),
+        ("patches/patch_refinegan_legacy_train.py", "rvc/train/train.py", "train.py - RefineGAN-Legacy architecture detection", "dir"),
+        ("patches/patch_refinegan_legacy_infer.py", "rvc/infer/infer.py", "infer.py - RefineGAN-Legacy architecture detection", "dir"),
     ]
 
     # Validate patch order matches dependencies
