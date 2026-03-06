@@ -5,32 +5,7 @@ from rvc.configs.config import Config
 import json
 
 config = Config()
-def _get_mute_base_path():
-    """Get the base path for mute audio files.
-
-    In frozen app mode, mute files are in the app bundle's Resources folder.
-    In development mode, they're relative to the current directory.
-    """
-    import sys
-    import os
-
-    if getattr(sys, 'frozen', False):
-        # Frozen app: use app bundle's Resources directory
-        # PyInstaller puts data files in Resources (sibling of Frameworks)
-        # sys._MEIPASS = Contents/Frameworks, so Resources = Contents/Resources
-        frameworks_path = getattr(sys, '_MEIPASS', '')
-        if frameworks_path:
-            contents_path = os.path.dirname(frameworks_path)  # Contents
-            resources_path = os.path.join(contents_path, 'Resources')
-            return resources_path
-        else:
-            # Fallback
-            return os.getcwd()
-    else:
-        # Development mode: use current directory
-        return os.getcwd()
-
-current_directory = _get_mute_base_path()
+current_directory = os.getcwd()
 
 
 def generate_config(sample_rate: int, model_path: str):

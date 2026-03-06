@@ -74,62 +74,7 @@ if vocoder == "RefineGAN":
     disc_version = "v3"
     multiscale_mel_loss = True
 
-def _get_applio_logs_path():
-    """Get logs path using FILE-BASED configuration (process-safe).
-
-    This works across all process boundaries including PyTorch multiprocessing.
-    """
-    import os
-    import json
-
-    # === Try file-based configuration (PROCESS-SAFE) ===
-    config_locations = [
-        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
-        os.path.expanduser("~/.applio/runtime_paths.json"),
-    ]
-
-    for config_path in config_locations:
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                logs_path = config.get("logs_path")
-                if logs_path:
-                    parent_dir = os.path.dirname(logs_path)
-                    if os.path.exists(parent_dir):
-                        result = os.path.dirname(logs_path)  # Return data_path (parent of logs)
-                        with open("/tmp/applio_debug.txt", "a") as _df:
-                            _df.write(f"=== _get_applio_logs_path (train.py): using config file: {result}\n")
-                        return result
-            except (json.JSONDecodeError, IOError, KeyError):
-                pass
-
-    # === Try environment variable ===
-    env_path = os.environ.get("APPLIO_DATA_PATH")
-    if env_path and os.path.exists(env_path):
-        with open("/tmp/applio_debug.txt", "a") as _df:
-            _df.write(f"=== _get_applio_logs_path (train.py): using env var: {env_path}\n")
-        return env_path
-
-    # === Try known data locations ===
-    known_paths = [
-        os.path.expanduser("~/Applio"),
-        os.path.expanduser("~/Library/Application Support/Applio/data"),
-    ]
-
-    for path in known_paths:
-        if os.path.exists(path):
-            with open("/tmp/applio_debug.txt", "a") as _df:
-                _df.write(f"=== _get_applio_logs_path (train.py): using known path: {path}\n")
-            return path
-
-    # === Last resort: use CWD ===
-    cwd = os.getcwd()
-    with open("/tmp/applio_debug.txt", "a") as _df:
-        _df.write(f"=== _get_applio_logs_path (train.py): fallback to CWD: {cwd}\n")
-    return cwd
-
-current_dir = _get_applio_logs_path()
+current_dir = os.getcwd()
 
 try:
     with open(

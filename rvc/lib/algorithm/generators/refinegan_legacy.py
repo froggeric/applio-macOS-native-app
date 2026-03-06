@@ -5,9 +5,11 @@ This module implements the original RefineGAN architecture from RVC-Boss,
 which differs from the simplified Applio version. The key differences are:
 
 1. source_conv has bias=True (current pre_conv has no bias)
-2. SineGenerator uses flat l_linear + l_tanh (current uses Sequential merge)
-3. downsample_blocks are Sequential(AdaIN, ResBlockLegacy) with separate in/out channels
-   (current uses single Conv1d with same in/out channels via channel doubling)
+2. SineGenerator uses flat l_linear (with bias) + l_tanh (current uses Sequential merge, no bias)
+3. SineGenerator uses harmonic_num=8 (current uses 0)
+4. downsample_blocks contain ResBlockLegacy with channel expansion in first conv
+   (current uses single Conv1d)
+5. conv_post has bias=True (current has no bias)
 
 This module exists to provide backward compatibility with pretrained models
 trained using the original RVC-Boss RefineGAN architecture.
@@ -27,17 +29,22 @@ from rvc.lib.algorithm.commons import init_weights, get_padding
 
 class ResBlockLegacy(nn.Module):
     """
-    Legacy residual block with separate in_channels and out_channels.
+    Legacy residual block with channel expansion in first conv.
 
-    Unlike the current ResBlock which uses the same channels for input and output,
-    this legacy version supports different in/out channels, matching the original
-    RVC-Boss RefineGAN architecture.
+    This matches the original RVC-Boss RefineGAN architecture where:
+    - convs1[0] expands channels: in_channels -> out_channels
+    - convs1[1:] maintain channels: out_channels -> out_channels
+    - convs2 all use out_channels
+
+    Note: The residual connection adds out_channels to in_channels input,
+    which only works when in_channels == out_channels. For channel expansion,
+    this will fail, but that's how the original was designed.
 
     Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-        kernel_size (int, optional): Kernel size for the convolutional layers. Defaults to 7.
-        dilation (tuple[int], optional): Tuple of dilation rates. Defaults to (1, 3, 5).
+        in_channels (int): Number of input channels (old channel count).
+        out_channels (int): Number of output channels (new channel count).
+        kernel_size (int, optional): Kernel size. Defaults to 7.
+        dilation (tuple[int], optional): Dilation rates. Defaults to (1, 3, 5).
         leaky_relu_slope (float, optional): Slope for Leaky ReLU. Defaults to 0.2.
     """
 
@@ -53,23 +60,40 @@ class ResBlockLegacy(nn.Module):
 
         self.leaky_relu_slope = leaky_relu_slope
 
-        self.convs1 = nn.ModuleList(
-            [
-                weight_norm(
-                    nn.Conv1d(
-                        in_channels,
-                        out_channels,
-                        kernel_size,
-                        stride=1,
-                        dilation=d,
-                        padding=get_padding(kernel_size, d),
+        # Legacy: first conv expands channels, subsequent convs maintain
+        self.convs1 = nn.ModuleList()
+        for i, d in enumerate(dilation):
+            if i == 0:
+                # First conv: in_channels -> out_channels (expansion)
+                self.convs1.append(
+                    weight_norm(
+                        nn.Conv1d(
+                            in_channels,
+                            out_channels,
+                            kernel_size,
+                            stride=1,
+                            dilation=d,
+                            padding=get_padding(kernel_size, d),
+                        )
                     )
                 )
-                for d in dilation
-            ]
-        )
+            else:
+                # Subsequent convs: out_channels -> out_channels
+                self.convs1.append(
+                    weight_norm(
+                        nn.Conv1d(
+                            out_channels,
+                            out_channels,
+                            kernel_size,
+                            stride=1,
+                            dilation=d,
+                            padding=get_padding(kernel_size, d),
+                        )
+                    )
+                )
         self.convs1.apply(init_weights)
 
+        # convs2: all use out_channels
         self.convs2 = nn.ModuleList(
             [
                 weight_norm(
@@ -103,36 +127,9 @@ class ResBlockLegacy(nn.Module):
             remove_weight_norm(c2)
 
 
-class AdaINLegacy(nn.Module):
-    """
-    Adaptive Instance Normalization layer for legacy architecture.
-
-    Identical to current AdaIN but included here for completeness.
-
-    Args:
-        channels (int): Number of input channels.
-        leaky_relu_slope (float, optional): Slope for Leaky ReLU. Defaults to 0.2.
-    """
-
-    def __init__(
-        self,
-        *,
-        channels: int,
-        leaky_relu_slope: float = 0.2,
-    ):
-        super().__init__()
-
-        self.weight = nn.Parameter(torch.ones(channels) * 1e-4)
-        self.activation = nn.LeakyReLU(leaky_relu_slope)
-
-    def forward(self, x: torch.Tensor):
-        gaussian = torch.randn_like(x) * self.weight[None, :, None]
-        return self.activation(x + gaussian)
-
-
 class SineGeneratorLegacy(nn.Module):
     """
-    Legacy sine generator with flat l_linear and l_tanh layers.
+    Legacy sine generator with flat l_linear (with bias) and l_tanh layers.
 
     Unlike the current SineGenerator which uses a Sequential `merge` module,
     this legacy version uses separate `l_linear` and `l_tanh` attributes,
@@ -140,7 +137,7 @@ class SineGeneratorLegacy(nn.Module):
 
     Args:
         samp_rate (int): Sampling rate in Hz.
-        harmonic_num (int): Number of harmonic overtones. Defaults to 0.
+        harmonic_num (int): Number of harmonic overtones. Defaults to 8.
         sine_amp (float): Amplitude of sine-waveform. Defaults to 0.1.
         noise_std (float): Standard deviation of Gaussian noise. Defaults to 0.003.
         voiced_threshold (float): F0 threshold for voiced/unvoiced classification. Defaults to 0.
@@ -149,7 +146,7 @@ class SineGeneratorLegacy(nn.Module):
     def __init__(
         self,
         samp_rate,
-        harmonic_num=0,
+        harmonic_num=8,  # Legacy uses 8 harmonics
         sine_amp=0.1,
         noise_std=0.003,
         voiced_threshold=0,
@@ -162,8 +159,8 @@ class SineGeneratorLegacy(nn.Module):
         self.sampling_rate = samp_rate
         self.voiced_threshold = voiced_threshold
 
-        # Legacy: flat attributes instead of Sequential merge
-        self.l_linear = nn.Linear(self.dim, 1, bias=False)
+        # Legacy: flat attributes with bias=True (current merge has bias=False)
+        self.l_linear = nn.Linear(self.dim, 1, bias=True)
         self.l_tanh = nn.Tanh()
 
     def _f02uv(self, f0):
@@ -224,8 +221,9 @@ class RefineGANLegacyGenerator(nn.Module):
 
     This generator uses the original architecture structure with:
     - source_conv (with bias=True) instead of pre_conv
-    - SineGeneratorLegacy with flat l_linear/l_tanh instead of Sequential merge
-    - downsample_blocks as Sequential(AdaINLegacy, ResBlockLegacy)
+    - SineGeneratorLegacy with harmonic_num=8, flat l_linear/l_tanh
+    - downsample_blocks containing ResBlockLegacy with channel expansion
+    - conv_post with bias=True
 
     Args:
         sample_rate (int, optional): Sampling rate. Defaults to 44100.
@@ -273,7 +271,7 @@ class RefineGANLegacyGenerator(nn.Module):
         )
 
         # f0 downsampling and upchanneling
-        # Legacy: Sequential(AdaINLegacy, ResBlockLegacy) instead of single Conv1d
+        # Legacy: ModuleList with ResBlockLegacy that does channel expansion
         channels = start_channels
         size = self.upp
         self.downsample_blocks = nn.ModuleList([])
@@ -284,10 +282,12 @@ class RefineGANLegacyGenerator(nn.Module):
             size = new_size
 
             new_channels = channels * 2
-            # Legacy structure: Sequential(AdaINLegacy, ResBlockLegacy)
+            # Legacy structure: ModuleList with ResBlockLegacy at index 1
+            # Index 0 is a placeholder (LeakyReLU activation applied in forward)
+            # This matches checkpoint structure: downsample_blocks[i].1.convs1
             self.downsample_blocks.append(
-                nn.Sequential(
-                    AdaINLegacy(channels=channels, leaky_relu_slope=leaky_relu_slope),
+                nn.ModuleList([
+                    nn.Identity(),  # Placeholder at index 0 (no params)
                     ResBlockLegacy(
                         in_channels=channels,
                         out_channels=new_channels,
@@ -295,7 +295,7 @@ class RefineGANLegacyGenerator(nn.Module):
                         dilation=(1, 3, 5),
                         leaky_relu_slope=leaky_relu_slope,
                     ),
-                )
+                ])
             )
             channels = new_channels
 
@@ -340,8 +340,9 @@ class RefineGANLegacyGenerator(nn.Module):
 
             channels = new_channels
 
+        # Legacy: conv_post with bias=True (current has bias=False)
         self.conv_post = weight_norm(
-            nn.Conv1d(channels, 1, 7, 1, padding=3, bias=False)
+            nn.Conv1d(channels, 1, 7, 1, padding=3, bias=True)
         )
         self.conv_post.apply(init_weights)
 
@@ -367,7 +368,9 @@ class RefineGANLegacyGenerator(nn.Module):
                 resampling_method="sinc_interp_kaiser",
                 beta=14.769656459379492,
             )
-            x = block(x)
+            # Legacy: apply LeakyReLU before the ResBlock
+            x = F.leaky_relu(x, self.leaky_relu_slope)
+            x = block[1](x)  # block[1] is ResBlockLegacy
 
         # expanding spectrogram from 192 to 256 channels
         mel = self.mel_conv(mel)
@@ -405,7 +408,7 @@ class RefineGANLegacyGenerator(nn.Module):
         remove_weight_norm(self.conv_post)
 
         for block in self.downsample_blocks:
-            # block is Sequential(AdaINLegacy, ResBlockLegacy)
+            # block is ModuleList([Identity, ResBlockLegacy])
             block[1].remove_weight_norm()
 
         for block in self.upsample_conv_blocks:

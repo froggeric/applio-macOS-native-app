@@ -84,26 +84,11 @@ datasets_path_relative = os.path.relpath(datasets_path, now_dir)
 
 
 def get_datasets_list():
-    """Get list of datasets with audio files.
-
-    In frozen app (PyInstaller bundle), returns absolute paths to ensure
-    paths work correctly regardless of working directory.
-    """
-    import sys
-
-    is_frozen = getattr(sys, 'frozen', False)
-
-    datasets = []
-    for dirpath, _, filenames in os.walk(datasets_path_relative):
-        if any(filename.endswith(tuple(sup_audioext)) for filename in filenames):
-            if is_frozen:
-                # In frozen app, return absolute path
-                datasets.append(os.path.abspath(dirpath))
-            else:
-                # In source run, return relative path (existing behavior)
-                datasets.append(dirpath)
-
-    return datasets
+    return [
+        dirpath
+        for dirpath, _, filenames in os.walk(datasets_path_relative)
+        if any(filename.endswith(tuple(sup_audioext)) for filename in filenames)
+    ]
 
 
 def refresh_datasets():
@@ -349,7 +334,7 @@ def train_tab():
                 sampling_rate = gr.Radio(
                     label=i18n("Sampling Rate"),
                     info=i18n("The sampling rate of the audio files."),
-                    choices=["32000", "40000", "44100", "48000"],
+                    choices=["32000", "40000", "48000"],
                     value="40000",
                     interactive=True,
                 )
@@ -958,13 +943,13 @@ def train_tab():
             def toggle_vocoder(vocoder):
                 if vocoder == "HiFi-GAN":
                     return {
-                        "choices": ["32000", "40000", "44100", "48000"],
+                        "choices": ["32000", "40000", "48000"],
                         "__type__": "update",
                         "value": "40000",
                     }
                 else:
                     return {
-                        "choices": ["24000", "32000", "44100"],
+                        "choices": ["24000", "32000"],
                         "__type__": "update",
                         "value": "32000",
                     }

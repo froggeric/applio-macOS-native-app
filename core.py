@@ -6,253 +6,11 @@ import subprocess
 from functools import lru_cache
 from distutils.util import strtobool
 
-def _resolve_custom_pretrained_path(path: str) -> str:
-    """Resolve custom pretrained path to absolute path.
-
-    The UI may return relative paths (rvc/models/...) which need to be
-    resolved relative to the data_path, not CWD.
-    """
-    if not path:
-        return path
-
-    # Already absolute
-    if os.path.isabs(path):
-        return path
-
-    # Try file-based configuration first
-    config_locations = [
-        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
-        os.path.expanduser("~/.applio/runtime_paths.json"),
-    ]
-
-    for config_path in config_locations:
-        if os.path.exists(config_path):
-            try:
-                import json
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                logs_path = config.get("logs_path")
-                if logs_path:
-                    data_path = os.path.dirname(logs_path)
-                    abs_path = os.path.join(data_path, path)
-                    if os.path.exists(abs_path):
-                        return abs_path
-            except (json.JSONDecodeError, IOError, KeyError):
-                pass
-
-    # Try environment variable
-    env_data_path = os.environ.get("APPLIO_DATA_PATH")
-    if env_data_path:
-        abs_path = os.path.join(env_data_path, path)
-        if os.path.exists(abs_path):
-            return abs_path
-
-    # Try known data locations
-    known_paths = [
-        os.path.expanduser("~/Applio"),
-        os.path.expanduser("~/Library/Application Support/Applio/data"),
-    ]
-
-    for data_path in known_paths:
-        if os.path.exists(data_path):
-            abs_path = os.path.join(data_path, path)
-            if os.path.exists(abs_path):
-                return abs_path
-
-    # Fallback: return path as-is (may fail, but at least we tried)
-    return path
-
-
-
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 
 current_script_directory = os.path.dirname(os.path.realpath(__file__))
-# DEBUG: Confirm core.py is being loaded
-with open("/tmp/applio_debug.txt", "a") as _f:
-    _f.write("=== CORE.PY IS BEING LOADED ===\n")
-    _f.write(f"__file__={__file__}\n")
-
-_APPLIO_RUNTIME_CONFIG = None
-# === Process Tracking (injected by patch) ===
-import json
-import datetime
-import fcntl
-import time as _time_module
-
-_PROCESS_STATE_FILE = None
-_PROCESS_LOCK_TIMEOUT = 5.0
-
-def _get_process_state_path():
-    global _PROCESS_STATE_FILE
-    if _PROCESS_STATE_FILE is None:
-        data_path = os.environ.get("APPLIO_DATA_PATH", os.path.expanduser("~/Applio"))
-        _PROCESS_STATE_FILE = os.path.join(data_path, ".applio", "active_processes.json")
-    return _PROCESS_STATE_FILE
-
-def _acquire_file_lock(lock_file, timeout=_PROCESS_LOCK_TIMEOUT):
-    """Acquire exclusive file lock with timeout."""
-    start_time = _time_module.time()
-    while True:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except (IOError, OSError):
-            if _time_module.time() - start_time > timeout:
-                return False
-            _time_module.sleep(0.05)
-
-def _release_file_lock(lock_file):
-    """Release file lock."""
-    try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except (IOError, OSError):
-        pass
-
-def _read_process_state():
-    path = _get_process_state_path()
-    if not os.path.exists(path):
-        return {"version": 1, "processes": {}}
-    lock_path = path + ".lock"
-    try:
-        # Use "a" mode to avoid truncating before lock is acquired
-        with open(lock_path, "a") as lock_file:
-            if not _acquire_file_lock(lock_file):
-                pass  # Proceed anyway
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            finally:
-                _release_file_lock(lock_file)
-    except (json.JSONDecodeError, IOError):
-        return {"version": 1, "processes": {}}
-
-def _write_process_state(state):
-    path = _get_process_state_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    lock_path = path + ".lock"
-    try:
-        # Use "a" mode to avoid truncating before lock is acquired
-        with open(lock_path, "a") as lock_file:
-            if not _acquire_file_lock(lock_file):
-                pass  # Proceed anyway
-            try:
-                temp = path + ".tmp"
-                with open(temp, "w", encoding="utf-8") as f:
-                    json.dump(state, f, indent=2)
-                os.rename(temp, path)
-            finally:
-                _release_file_lock(lock_file)
-    except IOError as e:
-        print(f"[ProcessTracking] Error saving state: {e}")
-
-def _verify_process_identity(pid, expected_start_time=None):
-    """Verify a process is still the same one we started (protects against PID recycling)."""
-    if not pid:
-        return False
-    try:
-        import psutil
-        proc = psutil.Process(pid)
-        if expected_start_time:
-            if isinstance(expected_start_time, str):
-                expected = datetime.datetime.fromisoformat(expected_start_time)
-            else:
-                expected = expected_start_time
-            actual = datetime.datetime.fromtimestamp(proc.create_time())
-            delta = abs((actual - expected).total_seconds())
-            if delta > 2.0:
-                return False
-        return True
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return False
-
-def _track_process(process_type, pid, **metadata):
-    state = _read_process_state()
-    state["processes"][process_type] = {
-        "pid": pid,
-        "started_at": datetime.datetime.now().isoformat(),
-        "status": "running",
-        **metadata
-    }
-    _write_process_state(state)
-
-def _update_process_status(process_type, status):
-    state = _read_process_state()
-    if process_type in state["processes"] and state["processes"][process_type]:
-        state["processes"][process_type]["status"] = status
-        _write_process_state(state)
-
-def _untrack_process(process_type):
-    state = _read_process_state()
-    if process_type in state["processes"]:
-        state["processes"][process_type] = None
-        _write_process_state(state)
-
-# === End Process Tracking ===
-
-
-
-def _get_logs_path():
-    """Get logs path using FILE-BASED configuration (process-safe)."""
-    import os
-    import json
-    global _APPLIO_RUNTIME_CONFIG
-
-    # === Try environment variable first (backward compatibility) ===
-    env_path = os.environ.get("APPLIO_LOGS_PATH")
-    if env_path:
-        parent_dir = os.path.dirname(env_path)
-        if os.path.exists(parent_dir):
-            with open("/tmp/applio_debug.txt", "a") as _df:
-                _df.write(f"=== _get_logs_path: using env var: {env_path}\n")
-            return env_path
-
-    # === Try file-based configuration (PROCESS-SAFE) ===
-    config_locations = [
-        os.path.expanduser("~/Library/Application Support/Applio/runtime_paths.json"),
-        os.path.expanduser("~/.applio/runtime_paths.json"),
-    ]
-
-    for config_path in config_locations:
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                logs_path = config.get("logs_path")
-                if logs_path:
-                    parent_dir = os.path.dirname(logs_path)
-                    if os.path.exists(parent_dir):
-                        with open("/tmp/applio_debug.txt", "a") as _df:
-                            _df.write(f"=== _get_logs_path: using config file: {logs_path}\n")
-                        return logs_path
-            except (json.JSONDecodeError, IOError, KeyError):
-                pass
-
-    # === Try known data locations ===
-    known_data_paths = [
-        os.environ.get("APPLIO_DATA_PATH"),
-        os.path.expanduser("~/Applio"),
-    ]
-
-    for data_path in known_data_paths:
-        if data_path:
-            logs_path = os.path.join(data_path, "logs")
-            if os.path.exists(data_path):
-                with open("/tmp/applio_debug.txt", "a") as _df:
-                    _df.write(f"=== _get_logs_path: using known path: {logs_path}\n")
-                return logs_path
-
-    # === Last resort: use CWD ===
-    cwd = os.getcwd()
-    result = os.path.join(cwd, "logs")
-    with open("/tmp/applio_debug.txt", "a") as _df:
-        _df.write(f"=== _get_logs_path: fallback to CWD: {result}\n")
-        _df.write(f"APPLIO_LOGS_PATH env={os.environ.get('APPLIO_LOGS_PATH')}\n")
-        _df.write(f"config files checked: {config_locations}\n")
-    return result
-
-logs_path = _get_logs_path()
-
+logs_path = os.path.join(current_script_directory, "logs")
 
 from rvc.lib.tools.prerequisites_download import prequisites_download_pipeline
 from rvc.train.process.model_blender import model_blender
@@ -607,15 +365,7 @@ def run_tts_script(
             ],
         ),
     ]
-    # Track TTS process
-
-    _proc = subprocess.Popen(command_tts)
-
-    _track_process("tts", _proc.pid)
-
-    _proc.wait()
-
-    _untrack_process("tts")
+    subprocess.run(command_tts)
     infer_pipeline = import_voice_converter()
     infer_pipeline.convert_audio(
         pitch=pitch,
@@ -695,57 +445,7 @@ def run_preprocess_script(
             ],
         ),
     ]
-    # Pre-flight: validate dataset path exists
-    if not os.path.exists(dataset_path):
-        abs_path = os.path.abspath(dataset_path)
-        if os.path.exists(abs_path):
-            dataset_path = abs_path
-        else:
-            return f"Error: Dataset path does not exist: {dataset_path}. Use an absolute path to your dataset folder."
-
-    # Track preprocess process with log redirection
-
-
-    _log_dir = os.path.join(logs_path, model_name)
-
-
-    os.makedirs(_log_dir, exist_ok=True)
-
-
-    _log_file_path = os.path.join(_log_dir, "preprocess.log")
-
-
-    _log_file = open(_log_file_path, "w")
-
-
-    try:
-
-
-        _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-
-
-        _track_process("preprocess", _proc.pid, model_name=model_name, log_file=_log_file_path)
-
-
-        _proc.wait()
-
-
-        _update_process_status("preprocess", "completed")
-
-
-    finally:
-
-
-        _log_file.close()
-
-
-        _untrack_process("preprocess")
-
-
-    if _proc.returncode != 0:
-
-
-        return f"Error: Preprocessing failed with code {_proc.returncode}"
+    subprocess.run(command)
     return f"Model {model_name} preprocessed successfully."
 
 
@@ -782,49 +482,7 @@ def run_extract_script(
         ),
     ]
 
-    # Track extract process with log redirection
-
-
-    _log_dir = os.path.join(logs_path, model_name)
-
-
-    os.makedirs(_log_dir, exist_ok=True)
-
-
-    _log_file_path = os.path.join(_log_dir, "extract.log")
-
-
-    _log_file = open(_log_file_path, "w")
-
-
-    try:
-
-
-        _proc = subprocess.Popen(command_1, stdout=_log_file, stderr=subprocess.STDOUT)
-
-
-        _track_process("extract", _proc.pid, model_name=model_name, log_file=_log_file_path)
-
-
-        _proc.wait()
-
-
-        _update_process_status("extract", "completed")
-
-
-    finally:
-
-
-        _log_file.close()
-
-
-        _untrack_process("extract")
-
-
-    if _proc.returncode != 0:
-
-
-        return f"Error: Feature extraction failed with code {_proc.returncode}"
+    subprocess.run(command_1)
 
     return f"Model {model_name} extracted successfully."
 
@@ -862,34 +520,9 @@ def run_train_script(
                 raise ValueError(
                     "Please provide the path to the pretrained G and D models."
                 )
-            pg, pd = _resolve_custom_pretrained_path(g_pretrained_path), _resolve_custom_pretrained_path(d_pretrained_path)
+            pg, pd = g_pretrained_path, d_pretrained_path
     else:
         pg, pd = "", ""
-
-    # Validate preprocessing and extraction before training
-    model_dir = os.path.join(logs_path, model_name)
-    model_info_path = os.path.join(model_dir, "model_info.json")
-
-    if not os.path.exists(model_info_path):
-        return f"Error: preprocessing not found. Run preprocessing first for model '{model_name}'."
-
-    try:
-        with open(model_info_path, "r", encoding="utf-8") as f:
-            model_info = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        return f"Error: could not read model_info.json: {e}."
-
-    total_seconds = model_info.get("total_seconds", 0)
-    if total_seconds <= 0:
-        return f"Error: no audio data was preprocessed (total_seconds={total_seconds}). Re-run preprocessing with a valid dataset."
-
-    extracted_dir = os.path.join(model_dir, "extracted")
-    if not os.path.exists(extracted_dir):
-        return f"Error: feature extraction not found. Run feature extraction first for model '{model_name}'."
-
-    extracted_files = os.listdir(extracted_dir)
-    if not extracted_files:
-        return f"Error: extracted directory is empty. Re-run feature extraction for model '{model_name}'."
 
     train_script_path = os.path.join("rvc", "train", "train.py")
     command = [
@@ -917,35 +550,7 @@ def run_train_script(
             ],
         ),
     ]
-    # Track training process with log redirection
-
-    _log_dir = os.path.join(logs_path, model_name)
-
-    os.makedirs(_log_dir, exist_ok=True)
-
-    _log_file_path = os.path.join(_log_dir, "training.log")
-
-    _log_file = open(_log_file_path, "w")
-
-    try:
-
-        _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-
-        _track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch, log_file=_log_file_path)
-
-        _proc.wait()
-
-        _update_process_status("training", "completed")
-
-    finally:
-
-        _log_file.close()
-
-        _untrack_process("training")
-
-    if _proc.returncode != 0:
-
-        return f"Error: Training failed with code {_proc.returncode}"
+    subprocess.run(command)
     run_index_script(model_name, index_algorithm)
     return f"Model {model_name} trained successfully."
 
@@ -960,19 +565,7 @@ def run_index_script(model_name: str, index_algorithm: str):
         index_algorithm,
     ]
 
-    # Track index process (short-running, optional)
-
-
-    _proc = subprocess.Popen(command)
-
-
-    _proc.wait()
-
-
-    if _proc.returncode != 0:
-
-
-        return f"Error: Index generation failed with code {_proc.returncode}"
+    subprocess.run(command)
     return f"Index file for {model_name} generated successfully."
 
 

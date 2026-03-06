@@ -23,10 +23,7 @@ from rvc.configs.config import Config
 
 # Load config
 config = Config()
-try:
-    mp.set_start_method("spawn", force=True)
-except RuntimeError:
-    pass  # Context already set
+mp.set_start_method("spawn", force=True)
 
 
 class FeatureInput:
