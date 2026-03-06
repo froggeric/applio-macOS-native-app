@@ -19,12 +19,12 @@ def patch_train(base_path: str) -> bool:
     """Patch train.py to add RefineGAN-Legacy architecture detection.
 
     Args:
-        base_path: Directory containing rvc/train/train.py
+        base_path: Directory containing train.py (e.g., rvc/train/)
 
     Returns:
         True if patched successfully,    Raises FileNotFoundError if file not found
     """
-    train_path = os.path.join(base_path, "rvc", "train", "train.py")
+    train_path = os.path.join(base_path, "train.py")
 
     if not os.path.exists(train_path):
         raise FileNotFoundError(f"train.py not found at {train_path}")

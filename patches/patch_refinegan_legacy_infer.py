@@ -19,12 +19,12 @@ def patch_infer(base_path: str) -> bool:
     """Patch infer.py to add RefineGAN-Legacy architecture detection.
 
     Args:
-        base_path: Directory containing rvc/infer/infer.py
+        base_path: Directory containing infer.py (e.g., rvc/infer/)
 
     Returns:
         True if patched successfully, False otherwise
     """
-    infer_path = os.path.join(base_path, "rvc", "infer", "infer.py")
+    infer_path = os.path.join(base_path, "infer.py")
 
     if not os.path.exists(infer_path):
         raise FileNotFoundError(f"infer.py not found at {infer_path}")

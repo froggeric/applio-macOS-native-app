@@ -20,12 +20,12 @@ def patch_synthesizers(base_path: str) -> bool:
     """Patch synthesizers.py to add RefineGAN-Legacy vocoder support.
 
     Args:
-        base_path: Directory containing rvc/lib/algorithm/synthesizers.py
+        base_path: Directory containing synthesizers.py (e.g., rvc/lib/algorithm/)
 
     Returns:
         True if successful, False otherwise
     """
-    synthesizers_path = os.path.join(base_path, "rvc", "lib", "algorithm", "synthesizers.py")
+    synthesizers_path = os.path.join(base_path, "synthesizers.py")
 
     if not os.path.exists(synthesizers_path):
         print(f"  [RefineGAN-Legacy] Error: {synthesizers_path} not found")
