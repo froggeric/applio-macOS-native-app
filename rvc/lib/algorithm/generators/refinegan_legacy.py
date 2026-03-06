@@ -58,6 +58,8 @@ class ResBlockLegacy(nn.Module):
     ):
         super().__init__()
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.leaky_relu_slope = leaky_relu_slope
 
         # Legacy: first conv expands channels, subsequent convs maintain
@@ -112,13 +114,20 @@ class ResBlockLegacy(nn.Module):
         self.convs2.apply(init_weights)
 
     def forward(self, x: torch.Tensor):
-        for c1, c2 in zip(self.convs1, self.convs2):
+        # On first iteration, skip residual if channels expand
+        # On subsequent iterations, channels match so add residual normally
+        for i, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
             xt = F.leaky_relu(x, self.leaky_relu_slope)
             xt = c1(xt)
             xt = F.leaky_relu(xt, self.leaky_relu_slope)
             xt = c2(xt)
-            x = xt + x
-
+            # Only add residual after first iteration (when channels match)
+            # First iteration expands channels: in_channels -> out_channels
+            # Subsequent iterations maintain: out_channels -> out_channels
+            if i > 0 or self.in_channels == self.out_channels:
+                x = xt + x
+            else:
+                x = xt  # Skip residual on first iteration when channels expand
         return x
 
     def remove_weight_norm(self):

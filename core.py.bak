@@ -1,3 +1,4 @@
+# _DATASET_PATH_RESOLVE_PATCHED = True
 import os
 import sys
 import json
@@ -617,6 +618,13 @@ def run_preprocess_script(
     normalization_mode: str = "none",
 ):
     preprocess_script_path = os.path.join("rvc", "train", "preprocess", "preprocess.py")
+    # CRITICAL: Resolve to absolute path BEFORE building command
+    # Fixes bug where relative paths failed in subprocess with different CWD
+    if dataset_path and not os.path.isabs(dataset_path):
+        abs_path = os.path.abspath(dataset_path)
+        if os.path.exists(abs_path):
+            dataset_path = abs_path
+
     command = [
         python,
         preprocess_script_path,

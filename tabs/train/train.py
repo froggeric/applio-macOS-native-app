@@ -1,3 +1,4 @@
+# _DATASET_PATH_ABSOLUTE_PATCHED = True
 import os
 import shutil
 import sys
@@ -180,9 +181,8 @@ def save_drop_dataset_audio(dropbox, dataset_name):
                 )
             )
             dataset_path = os.path.dirname(destination_path)
-            relative_dataset_path = os.path.relpath(dataset_path, now_dir)
-
-            return None, relative_dataset_path
+            # Return absolute path to fix subprocess resolution
+            return None, dataset_path
 
 
 # Drop Custom Embedder

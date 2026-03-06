@@ -251,6 +251,12 @@ No merge conflicts expected since macOS files don't overlap with upstream.
 - Repo name for releases: `froggeric/applio-macOS-native-app`
 - `gh release create` needs `workflow` scope; use `gh api` as fallback
 - Create release via API: `gh api repos/{owner}/{repo}/releases -X POST -f tag_name=v{version}`
+- Upload assets via curl when `gh release upload` fails: `curl -X POST -H "Authorization: token $(gh auth token)" -H "Content-Type: application/zip" --data-binary @file.zip "https://uploads.github.com/repos/{owner}/{repo}/releases/{release_id}/assets?name=file.zip"`
+- Delete release: `gh api repos/{owner}/{repo}/releases/{id} -X DELETE`
+
+**Version management:**
+- Check upstream version: `git show upstream/main:assets/config.json | grep version`
+- `build_macos.py` reads version from `assets/config.json` - keep both in sync
 
 ## Data Flow
 
