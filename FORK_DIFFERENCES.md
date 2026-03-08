@@ -10,10 +10,12 @@ This document catalogs all changes between this fork (froggeric/applio) and the 
 
 This fork maintains a **minimal delta** from upstream - only macOS native app additions, no modifications to core functionality. All upstream changes are applied via build-time patchers, not by modifying source files directly.
 
+**Important:** Fork-only files (`applio_launcher.py`, `build_macos.py`, `macos_wrapper.py`, etc.) can be modified directly. Upstream files (like `core.py`, `tabs/train/train.py`) must only be modified via patches at build time.
+
 | Category | Count |
 |----------|-------|
-| Added Files | 14+ |
-| Modified Files | 3 (.gitignore, build_macos.py, applio_launcher.py) |
+| Added Files | 16+ |
+| Modified Files | 1 (.gitignore only) |
 
 ---
 
@@ -70,11 +72,29 @@ This fork maintains a **minimal delta** from upstream - only macOS native app ad
 | `assets/loading.html` | HTML/CSS loading screen shown during backend startup |
 | `assets/pretrains_macos_additions.json` | Additional pretrained model definitions for Download tab |
 
-## Modified Files
+## Modified Files (from Upstream)
+
+**Only `.gitignore` is modified from upstream.** All other changes are either:
+- **Added files** (fork-only, can be modified directly)
+- **Build-time patches** (applied during build, source files restored after)
 
 | File | Change |
 |------|--------|
 | `.gitignore` | Added macOS build artifacts, model files (*.pt, *.pth, *.bin), rvc/models/, .archive/ |
+
+**Fork-only files that CAN be modified directly:**
+- `applio_launcher.py` - Native launcher (NEW, not in upstream)
+- `build_macos.py` - Build script (NEW, not in upstream)
+- `macos_wrapper.py` - Native wrapper (NEW, not in upstream)
+- `models_installer.py` - Models installer (NEW, not in upstream)
+- All `patches/*.py` files (NEW, not in upstream)
+
+**Upstream files that MUST use build-time patches:**
+- `core.py` - Patched at build time, restored after
+- `tabs/train/train.py` - Patched at build time, restored after
+- `rvc/train/train.py` - Patched at build time, restored after
+- `rvc/lib/algorithm/discriminators.py` - Patched at build time, restored after
+- All other upstream files
 
 ---
 

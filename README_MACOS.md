@@ -352,7 +352,19 @@ Applio.app/
 
 ## Fork Modifications (Build-Time Patches)
 
-This fork maintains minimal delta from upstream by patching at build time:
+This fork maintains minimal delta from upstream by patching at build time.
+
+**Fork-only files (can be modified directly):**
+- `applio_launcher.py` - Native macOS launcher with progress monitoring (NEW)
+- `build_macos.py` - Build script for app bundling (NEW)
+- `macos_wrapper.py` - Native window wrapper (NEW)
+- `models_installer.py` - Standalone models installer (NEW)
+- All `patches/*.py` files (NEW)
+
+**Upstream files (must use build-time patches):**
+- `core.py`, `tabs/train/train.py`, `rvc/train/train.py`, etc.
+- These are patched during build, then restored to keep repo clean
+- Never modify these files directly - always use patches
 
 | Patch | File | Purpose |
 |-------|------|---------|
@@ -365,7 +377,7 @@ This fork maintains minimal delta from upstream by patching at build time:
 | Static resources | `macos_wrapper.py` | Copies configs and tts_voices.json to user data at startup |
 | RefineGAN-Legacy | `patches/patch_refinegan_legacy*.py` | Support for original RVC-Boss RefineGAN pretrained models |
 
-**No upstream source files are modified** - all changes happen during the build process or at runtime startup.
+**No upstream source files are modified in the repo** - all changes happen during the build process or at runtime startup.
 
 ### Fork-Only Files
 
