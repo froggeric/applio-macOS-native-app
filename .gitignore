@@ -39,3 +39,6 @@ assets/pretrains.json
 
 # Claude Code local config
 .claude/
+
+# AI agent guidance (local)
+AGENTS.md

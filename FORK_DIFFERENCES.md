@@ -12,8 +12,8 @@ This fork maintains a **minimal delta** from upstream - only macOS native app ad
 
 | Category | Count |
 |----------|-------|
-| Added Files | 14 |
-| Modified Files | 1 (.gitignore) |
+| Added Files | 14+ |
+| Modified Files | 3 (.gitignore, build_macos.py, applio_launcher.py) |
 
 ---
 
@@ -23,6 +23,7 @@ This fork maintains a **minimal delta** from upstream - only macOS native app ad
 
 | File | Purpose |
 |------|---------|
+| `applio_launcher.py` | Native macOS launcher with progress window, process group leader, native menu bar |
 | `macos_wrapper.py` | Native macOS app wrapper using PyWebView with native dialogs (NSAlert/NSWindow), external data location, process tracking |
 | `build_macos.py` | PyInstaller build script for creating `Applio.app` bundle with DMG/PKG options |
 | `requirements_macos.txt` | macOS-specific dependencies (pywebview, pyinstaller, pyobjc) |
@@ -48,6 +49,18 @@ This fork maintains a **minimal delta** from upstream - only macOS native app ad
 | `patches/patch_train_44100.py` | Patches training UI to add 44.1kHz sample rate option |
 | `patches/patch_data_paths.py` | Patches core.py to redirect logs_path to external data location |
 | `patches/download_pretraineds.py` | Downloads custom pretrained models (KLM49, TITAN, KLM50, VCTK) |
+| `patches/patch_refinegan_legacy.py` | Patches RefineGAN for original RVC-Boss pretrained model compatibility |
+| `patches/patch_refinegan_legacy_*.py` | Architecture patches for RefineGAN legacy discriminator/generator |
+| `patches/patch_process_tracking.py` | Process tracking for training/inference monitoring |
+| `patches/patch_static_resources.py` | Static resource path resolution for bundled app |
+| `patches/patch_multiprocessing.py` | Multiprocessing fixes for macOS |
+| `patches/patch_f0_model_paths.py` | F0 model path resolution |
+| `patches/patch_pretrained_selector.py` | Pretrained model selector patches |
+| `patches/patch_train_paths.py` | Training path resolution |
+| `patches/patch_dataset_paths.py` | Dataset path resolution |
+| `patches/patch_extract_error_logging.py` | Enhanced error logging for feature extraction |
+| `patches/patch_subprocess_validation.py` | Subprocess validation for training |
+| `patches/patch_preflight_validation.py` | Preflight validation for training configuration |
 
 ### Assets
 
@@ -100,6 +113,14 @@ On first launch, users select where to store all Applio data (models, datasets, 
    - Check for Updates: Native NSAlert with version comparison
    - Close confirmation: Native NSAlert when closing with active processes
    - Progress monitor: Native NSWindow with pause/resume/terminate controls
+
+4. **Native Progress Window** (`applio_launcher.py`):
+   - Training info panel showing best epoch (lowest loss), current epoch, training speed
+   - Rich status card with phase detection, tqdm progress parsing
+   - Real-time log tailing with smart buffer management
+   - Process controls: Terminate, Pause/Resume, Open Logs, Relaunch App
+   - Queue-based architecture with memory limits
+   - File rotation detection and race condition handling
 
 4. **Process Tracking:**
    - Background training/inference process monitoring

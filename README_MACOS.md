@@ -363,6 +363,7 @@ This fork maintains minimal delta from upstream by patching at build time:
 | Native wrapper | `macos_wrapper.py` | PyWebview native macOS window with external data location support |
 | Native dialogs | `macos_wrapper.py` | All dialogs use native macOS NSAlert/NSWindow (About, Updates, Progress) |
 | Static resources | `macos_wrapper.py` | Copies configs and tts_voices.json to user data at startup |
+| RefineGAN-Legacy | `patches/patch_refinegan_legacy*.py` | Support for original RVC-Boss RefineGAN pretrained models |
 
 **No upstream source files are modified** - all changes happen during the build process or at runtime startup.
 
@@ -370,6 +371,7 @@ This fork maintains minimal delta from upstream by patching at build time:
 
 | File | Purpose |
 |------|---------|
+| `applio_launcher.py` | Native macOS launcher with progress monitoring window |
 | `build_macos.py` | Main build script (app, DMG, models installer) |
 | `macos_wrapper.py` | Native window wrapper with external data location, native dialogs |
 | `models_installer.py` | Standalone models installer (shares preferences with main app) |
@@ -378,6 +380,8 @@ This fork maintains minimal delta from upstream by patching at build time:
 | `ApplioModelsInstaller.spec` | Models installer PyInstaller config (generated) |
 | `patches/patch_train_44100.py` | Adds 44100 Hz option to training UI |
 | `patches/patch_data_paths.py` | Redirects logs_path to external data location |
+| `patches/patch_refinegan_legacy*.py` | RefineGAN legacy model support patches |
+| `patches/patch_process_tracking.py` | Process tracking for training monitoring |
 | `patches/download_pretraineds.py` | Downloads custom pretrained models |
 | `assets/pretrains_macos_additions.json` | Additional pretrained model definitions |
 | `assets/entitlements.plist` | Code signing entitlements |

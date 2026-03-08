@@ -27,6 +27,7 @@ import subprocess
 import threading
 import queue
 import json
+import re
 import logging
 import datetime
 import fcntl
@@ -51,7 +52,7 @@ try:
         NSBezelBorder, NSApplicationActivationPolicyRegular,
         NSAccessibilityAnnouncementRequestedNotification,
         NSCommandKeyMask, NSShiftKeyMask, NSBox, NSColor,
-        NSFontWeightMedium, NSFontWeightSemibold,
+        NSFontWeightMedium, NSFontWeightSemibold, NSFontWeightRegular,
     )
     from Foundation import NSRunLoop, NSDate, NSNotificationCenter, NSURL
     from PyObjCTools import AppHelper
@@ -151,9 +152,28 @@ if len(sys.argv) > 1:
 # =================================================================
 PROCESS_STATE_FILE = os.path.expanduser("~/.applio/active_processes.json")
 
-# UI update constants
-LOG_SCROLL_INTERVAL = 5        # Scroll log view every N lines to reduce UI overhead
-MAX_QUEUE_ITEMS_PER_TICK = 20  # Max queue items to process per timer tick
+# Window dimensions
+WINDOW_WIDTH = 500
+WINDOW_HEIGHT = 660  # Updated for training panel
+
+# Layout constants
+PADDING = 15
+STATUS_CARD_HEIGHT = 72
+TRAINING_PANEL_HEIGHT = 80
+LOG_HEIGHT = 216
+
+# Timing constants (seconds)
+FILE_POLL_INTERVAL = 0.5
+TIMER_TICK_INTERVAL = 0.5
+PHASE_TIMEOUT = 2.0
+FILE_LOCK_TIMEOUT = 5.0
+
+# Limits
+MAX_LOG_LINES = 200  # Match deque maxlen for consistency
+MAX_INITIAL_LINES = 50
+MAX_QUEUE_ITEMS_PER_TICK = 20
+QUEUE_MAX_SIZE = 1000
+LOG_SCROLL_INTERVAL = 5
 
 # Logging setup
 log_dir = os.path.expanduser("~/Library/Logs/Applio")
@@ -171,9 +191,6 @@ logging.info("[Launcher] Starting Applio Launcher")
 
 # Thread lock for in-memory state access
 _state_lock = threading.Lock()
-
-# File lock timeout in seconds
-FILE_LOCK_TIMEOUT = 5.0
 
 
 def get_process_state_path():
@@ -397,7 +414,7 @@ class ProgressWindowController:
         self.start_time = datetime.datetime.now()
         self.timer = None
         self._observer = None
-        self.log_lines = deque(maxlen=200)  # Efficient O(1) append with auto-trimming
+        self.log_lines = deque()  # Manual trimming for text storage sync
         self._last_file_pos = 0
         self._last_file_size = 0
         # Smart log display state
@@ -408,6 +425,13 @@ class ProgressWindowController:
         # Epoch tracking for progress bar
         self._total_epoch = process_info.get('total_epoch')
         self._current_epoch = 0
+        # Training status tracking (for training tasks only)
+        self._training_status = None          # Parsed training status dict
+        self._best_epoch = None               # Epoch with lowest loss
+        self._best_loss = None                # Lowest loss value
+        self._best_step = None                # Step at best epoch
+        self._current_step = 0                # Current training step
+        self._training_speed = None           # Time per epoch
         self.window = None  # Initialize to None for safe cleanup
         # Thread safety and file tracking
         self._shutdown_event = threading.Event()  # Graceful shutdown signal
@@ -430,7 +454,7 @@ class ProgressWindowController:
         """Create the native window."""
         style = NSTitledWindowMask | NSClosableWindowMask
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 500, 580),
+            NSMakeRect(0, 0, 500, 660),  # Increased from 580 to 660 for training info panel
             style,
             NSBackingStoreBuffered,
             False
@@ -460,7 +484,7 @@ class ProgressWindowController:
         """Create UI elements with accessibility support."""
         window_width = 500
         padding = 15
-        y = 580 - padding
+        y = 660 - padding  # Updated from 580 to match new window height
 
         # Set window accessibility
         self.window.setAccessibilityLabel_(f"Applio {self.process_type.capitalize()} Progress")
@@ -557,6 +581,73 @@ class ProgressWindowController:
         self.progress_bar.setAccessibilityIdentifier_("progress_bar")
         self.window.contentView().addSubview_(self.progress_bar)
         y -= 30
+
+        # Training Info Panel (only for training tasks) - 80px total
+        # This panel shows critical training metrics: best epoch, current progress, speed
+        TRAINING_PANEL_HEIGHT = 80
+        is_training = self.process_type == "training"
+
+        # Training panel container (hidden for non-training tasks)
+        self.training_panel_box = NSBox.alloc().initWithFrame_(
+            NSMakeRect(padding - 5, y - TRAINING_PANEL_HEIGHT, window_width - 2*padding + 10, TRAINING_PANEL_HEIGHT)
+        )
+        self.training_panel_box.setBoxType_(1)  # NSBoxCustom
+        self.training_panel_box.setBorderType_(2)  # NSBezelBorder for subtle inset look
+        self.training_panel_box.setTitlePosition_(0)  # No title
+        self.training_panel_box.setHidden_(not is_training)
+        self.window.contentView().addSubview_(self.training_panel_box)
+
+        # Best Epoch Row (most prominent) - highlighted with accent color
+        # Positioned at top of training panel (y - 28 from panel top)
+        best_row_y = y - 28
+        self.best_epoch_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, best_row_y, window_width - 2*padding, 28)
+        )
+        self.best_epoch_label.setStringValue_("Best Epoch: Waiting for training...")
+        self.best_epoch_label.setBezeled_(False)
+        self.best_epoch_label.setDrawsBackground_(False)
+        self.best_epoch_label.setEditable_(False)
+        self.best_epoch_label.setFont_(NSFont.boldSystemFontOfSize_(14))
+        self.best_epoch_label.setTextColor_(NSColor.systemGreenColor())  # Green for "best"
+        self.best_epoch_label.setHidden_(not is_training)
+        self.best_epoch_label.setAccessibilityLabel_("Best epoch indicator")
+        self.best_epoch_label.setAccessibilityHelp_("Shows the epoch with lowest loss - use this for inference")
+        self.window.contentView().addSubview_(self.best_epoch_label)
+
+        # Current Epoch + Speed Row (middle of panel)
+        current_row_y = y - 54
+        self.current_epoch_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, current_row_y, window_width - 2*padding, 22)
+        )
+        self.current_epoch_label.setStringValue_("Current: -- | Step: -- | Speed: --/epoch")
+        self.current_epoch_label.setBezeled_(False)
+        self.current_epoch_label.setDrawsBackground_(False)
+        self.current_epoch_label.setEditable_(False)
+        self.current_epoch_label.setFont_(NSFont.systemFontOfSize_weight_(12, NSFontWeightMedium))
+        self.current_epoch_label.setTextColor_(NSColor.labelColor())
+        self.current_epoch_label.setHidden_(not is_training)
+        self.current_epoch_label.setAccessibilityLabel_("Current training status")
+        self.window.contentView().addSubview_(self.current_epoch_label)
+
+        # Best epoch details (step info) - bottom of panel
+        details_y = y - 76
+        self.best_details_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(padding, details_y, window_width - 2*padding, 18)
+        )
+        self.best_details_label.setStringValue_("Loss: -- | Step: --")
+        self.best_details_label.setBezeled_(False)
+        self.best_details_label.setDrawsBackground_(False)
+        self.best_details_label.setEditable_(False)
+        self.best_details_label.setFont_(NSFont.systemFontOfSize_weight_(10, NSFontWeightRegular))
+        self.best_details_label.setTextColor_(NSColor.secondaryLabelColor())
+        self.best_details_label.setHidden_(not is_training)
+        self.window.contentView().addSubview_(self.best_details_label)
+
+        # Adjust y position based on whether training panel is shown
+        if is_training:
+            y -= TRAINING_PANEL_HEIGHT + 8  # Account for the training panel
+        else:
+            y -= 4  # Small gap before Rich Status Card
 
         # Rich Status Card (72px total)
         STATUS_CARD_HEIGHT = 72
@@ -746,16 +837,16 @@ class ProgressWindowController:
         import threading
         import queue
 
-        self._file_queue = queue.Queue()
+        self._file_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+        self._dropped_lines = 0  # Counter for dropped lines when queue is full
         self._file_thread = threading.Thread(target=self._file_poll_worker, daemon=True)
         self._file_thread.start()
 
     def _file_poll_worker(self):
         """Background worker thread for file polling."""
-        MAX_INITIAL_LINES = 50  # Only show last 50 lines on initial read
 
         while not self._shutdown_event.is_set():
-            time.sleep(0.5)  # Poll every 500ms
+            time.sleep(FILE_POLL_INTERVAL)
 
             if self._shutdown_event.is_set():
                 break
@@ -781,12 +872,13 @@ class ProgressWindowController:
                     self._file_inode = current_inode
 
                 if current_size > self._last_file_size:
-                    with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
-                        # If this is the first read (position 0), only read last portion
-                        with self._state_lock:
-                            last_pos = self._last_file_pos
+                    # Read file position under lock, then release for I/O
+                    with self._state_lock:
+                        seek_position = self._last_file_pos
+                        inode_to_verify = self._file_inode
 
-                        if last_pos == 0 and current_size > 0:
+                    with open(self.log_file_path, "r", encoding="utf-8", errors="replace") as f:
+                        if seek_position == 0 and current_size > 0:
                             # Read from end of file, limiting to ~50 lines
                             # Estimate ~200 bytes per line on average
                             estimated_start = max(0, current_size - (MAX_INITIAL_LINES * 200))
@@ -800,39 +892,68 @@ class ProgressWindowController:
                             lines = content.splitlines()
                         else:
                             # Normal incremental read
-                            f.seek(last_pos)
+                            f.seek(seek_position)
                             content = f.read()
                             lines = content.splitlines()
 
                         new_pos = f.tell()
 
-                        with self._state_lock:
+                    # Verify inode hasn't changed during read (file rotation detection)
+                    try:
+                        verify_inode = os.stat(self.log_file_path).st_ino
+                    except FileNotFoundError:
+                        # File deleted during read - skip this update
+                        continue
+
+                    if verify_inode != inode_to_verify:
+                        # File was rotated during read - skip this update
+                        continue
+
+                    with self._state_lock:
+                        # Only update if inode still matches
+                        if self._file_inode == inode_to_verify:
                             self._last_file_pos = new_pos
                             self._last_file_size = current_size
 
-                        # Parse lines and queue updates
-                        for line in lines:
-                            if not line.strip():
-                                continue
+                    # Parse lines and queue updates
+                    for line in lines:
+                        if not line.strip():
+                            continue
 
-                            # Check if this is a tqdm line
-                            if self._is_tqdm_line(line):
-                                # Parse tqdm and queue for live zone
-                                tqdm_data = self._parse_tqdm_line(line)
-                                if tqdm_data:
-                                    # Detect phase from previous non-tqdm line
-                                    with self._state_lock:
-                                        last_line = self._last_non_tqdm_line
-                                    phase_name = self._detect_phase_name(last_line)
-                                    self._file_queue.put(("tqdm", {"data": tqdm_data, "phase": phase_name}))
-                            else:
-                                # Non-tqdm line - store for phase detection and queue for logging
+                        # Check if this is a tqdm line
+                        if self._is_tqdm_line(line):
+                            # Parse tqdm and queue for live zone
+                            tqdm_data = self._parse_tqdm_line(line)
+                            if tqdm_data:
+                                # Detect phase from previous non-tqdm line
                                 with self._state_lock:
-                                    self._last_non_tqdm_line = line
-                                # Parse epoch progress (for progress bar)
-                                self._parse_epoch_progress_bg(line)
-                                # Queue log line for main thread
-                                self._file_queue.put(("log_line", line))
+                                    last_line = self._last_non_tqdm_line
+                                phase_name = self._detect_phase_name(last_line)
+                                try:
+                                    self._file_queue.put(("tqdm", {"data": tqdm_data, "phase": phase_name}), block=False)
+                                except queue.Full:
+                                    pass  # Skip tqdm update if queue is full
+                        else:
+                            # Non-tqdm line - store for phase detection and queue for logging
+                            with self._state_lock:
+                                self._last_non_tqdm_line = line
+                            # Parse epoch progress (for progress bar)
+                            self._parse_epoch_progress_bg(line)
+                            # Check for training status line (for training tasks)
+                            if self.process_type == "training":
+                                training_data = self._parse_training_status_line(line)
+                                if training_data:
+                                    try:
+                                        self._file_queue.put(("training_status", training_data), block=False)
+                                    except queue.Full:
+                                        pass  # Skip training status if queue is full
+                            # Queue log line for main thread
+                            try:
+                                self._file_queue.put(("log_line", line), block=False)
+                            except queue.Full:
+                                self._dropped_lines += 1
+                                if self._dropped_lines == 1:
+                                    logging.warning("[ProgressWindow] Queue full, dropping log lines (consumer lagging)")
             except OSError as e:
                 logging.warning(f"[ProgressWindow] File access error in poll worker: {e}")
             except Exception as e:
@@ -843,7 +964,6 @@ class ProgressWindowController:
         if not self._total_epoch:
             return
 
-        import re
         match = re.search(r'[Ee]poch[:\s]*(\d+)\s*/\s*(\d+)', line)
         if match:
             current = int(match.group(1))
@@ -853,11 +973,13 @@ class ProgressWindowController:
                 if not self._total_epoch:
                     self._total_epoch = total
                 # Queue progress update for main thread
-                self._file_queue.put(("progress", {"current": current, "total": total}))
+                try:
+                    self._file_queue.put(("progress", {"current": current, "total": total}), block=False)
+                except queue.Full:
+                    pass  # Skip progress update if queue is full
 
     def _is_tqdm_line(self, line):
         """Check if line is a tqdm progress bar update."""
-        import re
         # Match patterns like: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
         return bool(re.match(r'^\s*\d+%\|.*\|\s*\d+/\d+\s*\[', line))
 
@@ -867,7 +989,6 @@ class ProgressWindowController:
         Returns dict with: percent, current, total, eta, rate, rate_unit
         or None if parsing fails.
         """
-        import re
         # Pattern: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
         match = re.match(
             r'^\s*(\d+)%\|.*\|\s*(\d+)/(\d+)\s*\[([^\]]+)\]',
@@ -919,7 +1040,6 @@ class ProgressWindowController:
         - "Preprocessing audio files..."
         - "Extracting features..."
         """
-        import re
 
         # Strip timestamp prefix if present (e.g., "[11:02:15] ")
         stripped = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]\s*', '', line)
@@ -945,6 +1065,92 @@ class ProgressWindowController:
                 return phase_map.get(phase, phase)
 
         return None
+
+    def _parse_training_status_line(self, line):
+        """Parse training status line with epoch/step/loss info.
+
+        Parses lines like:
+        "Frederic v6 KLM5-44k | epoch=115 | step=11385 | time=23:13:10 | training_speed=0:15:25 | lowest_value=2.876 (epoch 76 and step 7455)"
+
+        Returns dict with: epoch, step, training_speed, best_epoch, best_loss, best_step
+        or None if not a training status line.
+        """
+
+        # Match training status line pattern
+        # Look for: epoch=N, step=N, training_speed=HH:MM:SS or M:SS, lowest_value=X.XXX (epoch N and step N)
+        match = re.match(
+            r'.*\|\s*epoch=(\d+)\s*\|\s*step=(\d+)\s*\|\s*time=[\d:]+\s*\|\s*training_speed=([\d:]+)\s*\|\s*lowest_value=([\d.]+)\s*\(epoch\s+(\d+)\s+and\s+step\s+(\d+)\)',
+            line
+        )
+        if match:
+            return {
+                'epoch': int(match.group(1)),
+                'step': int(match.group(2)),
+                'training_speed': match.group(3),
+                'best_loss': float(match.group(4)),
+                'best_epoch': int(match.group(5)),
+                'best_step': int(match.group(6)),
+            }
+
+        # Also try simpler pattern without lowest_value (early training)
+        match = re.match(
+            r'.*\|\s*epoch=(\d+)\s*\|\s*step=(\d+)\s*\|\s*time=[\d:]+\s*\|\s*training_speed=([\d:]+)',
+            line
+        )
+        if match:
+            return {
+                'epoch': int(match.group(1)),
+                'step': int(match.group(2)),
+                'training_speed': match.group(3),
+                'best_loss': None,
+                'best_epoch': None,
+                'best_step': None,
+            }
+
+        return None
+
+    def _update_training_panel(self, training_data):
+        """Update the training info panel with current training status.
+
+        Args:
+            training_data: dict with epoch, step, training_speed, best_loss, best_epoch, best_step
+        """
+        # Only update if this is a training process
+        if self.process_type != "training":
+            return
+
+        # Update current epoch and step
+        self._current_epoch = training_data.get('epoch', 0)
+        self._current_step = training_data.get('step', 0)
+        self._training_speed = training_data.get('training_speed')
+
+        # Update best epoch info if available
+        if training_data.get('best_epoch') is not None:
+            self._best_epoch = training_data['best_epoch']
+            self._best_loss = training_data['best_loss']
+            self._best_step = training_data['best_step']
+
+        # Update UI - Best Epoch (most prominent)
+        if self._best_epoch is not None:
+            self.best_epoch_label.setStringValue_(
+                f"Best: Epoch {self._best_epoch}  |  Loss {self._best_loss:.4f}"
+            )
+            self.best_details_label.setStringValue_(
+                f"Step {self._best_step:,}"
+            )
+        else:
+            self.best_epoch_label.setStringValue_("Best Epoch: Training in progress...")
+            self.best_details_label.setStringValue_("Loss: -- | Step: --")
+
+        # Update Current Status
+        speed_str = f"{self._training_speed}/epoch" if self._training_speed else "--/epoch"
+        self.current_epoch_label.setStringValue_(
+            f"Current: Epoch {self._current_epoch}  |  Step {self._current_step:,}  |  Speed: {speed_str}"
+        )
+
+        # Update progress bar if we have total_epoch
+        if self._total_epoch and self._current_epoch:
+            self.progress_bar.setDoubleValue_(self._current_epoch)
 
     def _update_live_zone(self, tqdm_data, phase_name=None):
         """Update the Rich Status Card with current tqdm progress."""
@@ -1049,7 +1255,7 @@ class ProgressWindowController:
         """Start a lightweight timer for UI updates from queue."""
         from AppKit import NSTimer
         self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            0.5, self, "processQueueUpdates:", None, True
+            TIMER_TICK_INTERVAL, self, "processQueueUpdates:", None, True
         )
 
     def processQueueUpdates_(self, timer):
@@ -1072,6 +1278,9 @@ class ProgressWindowController:
                 elif update_type == "tqdm":
                     # Update live zone with tqdm progress
                     self._update_live_zone(data["data"], data.get("phase"))
+                elif update_type == "training_status":
+                    # Update training info panel (training tasks only)
+                    self._update_training_panel(data)
                 elif update_type == "progress":
                     # Update progress bar
                     self.progress_bar.setDoubleValue_(data["current"])
@@ -1109,7 +1318,7 @@ class ProgressWindowController:
         # Check for live zone timeout (no tqdm for 2+ seconds)
         if self._last_tqdm_time and self._live_phase:
             elapsed = (datetime.datetime.now() - self._last_tqdm_time).total_seconds()
-            if elapsed > 2.0:
+            if elapsed > PHASE_TIMEOUT:
                 # Phase likely complete - log completion and clear live zone
                 # _log_phase_completion returns True only if a phase was active
                 if self._log_phase_completion():
@@ -1123,42 +1332,38 @@ class ProgressWindowController:
 
     def _add_log_line(self, line):
         """Add a line to the log view with buffer limit to prevent slowdowns."""
-        MAX_LOG_LINES = 100  # Limit to prevent performance issues
-
         self.log_lines.append(line)
 
-        # Trim old lines if buffer is too large
-        if len(self.log_lines) > MAX_LOG_LINES:
-            # Remove oldest lines and update text storage
-            lines_to_remove = len(self.log_lines) - MAX_LOG_LINES
-            self.log_lines = self.log_lines[lines_to_remove:]
+        # Efficient O(1) trimming using popleft - also sync text storage
+        while len(self.log_lines) > MAX_LOG_LINES:
+            self.log_lines.popleft()
+            # Note: Text storage trimming is done via periodic reset below
 
-            # Reset text storage with trimmed content (batch update)
-            text_storage = self.log_view.textStorage()
+        text_storage = self.log_view.textStorage()
+        current_length = text_storage.length()
+
+        # Add newline if not first line
+        if current_length > 0 and not text_storage.string().endswith("\n"):
+            text_storage.replaceCharactersInRange_withString_(
+                (current_length, 0), "\n"
+            )
+            current_length += 1
+
+        # Append new line
+        text_storage.replaceCharactersInRange_withString_(
+            (current_length, 0), line
+        )
+
+        # Periodically reset text storage to match deque content
+        # This prevents unbounded growth and syncs with deque
+        if len(self.log_lines) >= MAX_LOG_LINES and len(self.log_lines) % MAX_LOG_LINES == 0:
             text_storage.beginEditing()
             text_storage.deleteCharactersInRange_((0, text_storage.length()))
             text_storage.appendString_("\n".join(self.log_lines))
             text_storage.endEditing()
-        else:
-            # Incremental update for small additions
-            text_storage = self.log_view.textStorage()
-            current_length = text_storage.length()
-
-            # Add newline if not first line
-            if current_length > 0 and not text_storage.string().endswith("\n"):
-                text_storage.replaceCharactersInRange_withString_(
-                    (current_length, 0), "\n"
-                )
-                current_length += 1
-
-            # Append new line
-            text_storage.replaceCharactersInRange_withString_(
-                (current_length, 0), line
-            )
 
         # Scroll to bottom only every N lines to reduce overhead
         if len(self.log_lines) % LOG_SCROLL_INTERVAL == 0:
-            text_storage = self.log_view.textStorage()
             self.log_view.scrollRangeToVisible_(
                 (text_storage.length(), 0)
             )
