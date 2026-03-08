@@ -781,14 +781,15 @@ info_plist_path = os.path.join("dist", f"{APP_NAME}.app", "Contents", "Info.plis
 app_path = os.path.join("dist", f"{APP_NAME}.app")
 
 if os.path.exists(info_plist_path):
-    print("\nPatching Info.plist for Microphone access & Metadata...")
+    print("\nPatching Info.plist for Metadata...")
     try:
         import plistlib
         with open(info_plist_path, 'rb') as f:
             plist = plistlib.load(f)
 
         # Permissions & Usage Descriptions
-        plist['NSMicrophoneUsageDescription'] = "Applio needs microphone access to record audio for voice conversion."
+        # Note: NSMicrophoneUsageDescription removed - wrapper doesn't need direct mic access.
+        # Gradio runs in browser via pywebview, browser handles its own mic permissions.
         plist['NSCameraUsageDescription'] = "Applio needs camera access for visual processing."
         plist['NSDesktopFolderUsageDescription'] = "Applio needs desktop access to save and load models."
         plist['NSDocumentsFolderUsageDescription'] = "Applio needs documents access to save audio exports."
