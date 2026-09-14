@@ -192,8 +192,6 @@ def apply(path):
 
 if __name__ == "__main__":
     target = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else os.path.join(REPO, "tabs/train/train.py")
+        sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "tabs/train/train.py")
     )
     sys.exit(0 if apply(target) else 2)

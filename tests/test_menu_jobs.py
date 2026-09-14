@@ -81,17 +81,16 @@ def test_long_name_truncation_and_paused_suffix():
     title = applio_launcher._menu_job_title(proc, training_epoch=12345)
     assert len(title) <= 64, title
     # name-only types + the bare-tracked tts title (no model_name recorded)
-    assert applio_launcher._menu_job_title(
-        {"type": "preprocess", "model_name": "ds"}
-    ) == "ds"
+    assert (
+        applio_launcher._menu_job_title({"type": "preprocess", "model_name": "ds"})
+        == "ds"
+    )
     assert applio_launcher._menu_job_title({"type": "tts"}) == "TTS: active job"
 
 
 if __name__ == "__main__":
     fns = [
-        v
-        for k, v in sorted(globals().items())
-        if k.startswith("test_") and callable(v)
+        v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)
     ]
     for fn in fns:
         fn()

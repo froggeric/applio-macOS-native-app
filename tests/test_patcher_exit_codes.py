@@ -23,7 +23,12 @@ PY = sys.executable
 CASES = [
     ("patches/patch_progress_routes.py", "app.py", "prevent_thread_lock=", "file"),
     ("patches/patch_web_a11y_payload.py", "app.py", "def launch_gradio(", "file"),
-    ("patches/patch_train_paths.py", "rvc/train/train.py", "current_dir = os.getcwd()", "dir"),
+    (
+        "patches/patch_train_paths.py",
+        "rvc/train/train.py",
+        "current_dir = os.getcwd()",
+        "dir",
+    ),
 ]
 # All CASES anchors occur EXACTLY ONCE in their pristine source (verified
 # 2026-08-21) — replace-all is still used defensively below.
@@ -79,7 +84,7 @@ def test_no_unclassified_exit1_remains():
                 continue
             if '"""' in line:  # injected-string site
                 continue
-            context = "".join(lines[max(0, i - 4):i + 1])
+            context = "".join(lines[max(0, i - 4) : i + 1])
             if "argv" not in context and "argc" not in context:
                 violations.append(f"{name}:{i + 1}")
     assert not violations, f"unclassified sys.exit(1) sites: {violations}"

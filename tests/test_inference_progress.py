@@ -36,9 +36,9 @@ def _patched_infer_source():
     spec.loader.exec_module(patcher)
     src_path = os.path.join(REPO, "rvc", "infer", "infer.py")
     src = open(src_path, encoding="utf-8").read()
-    assert "Inference Progress Tracking" not in src, (
-        "rvc/infer/infer.py is dirty (patched?) - restore first"
-    )
+    assert (
+        "Inference Progress Tracking" not in src
+    ), "rvc/infer/infer.py is dirty (patched?) - restore first"
     with tempfile.TemporaryDirectory() as td:
         shutil.copy(src_path, os.path.join(td, "infer.py"))
         assert patcher.patch_infer_py(td), "patcher anchor missed (upstream drift?)"
@@ -116,9 +116,7 @@ def test_batch_toast_calls_in_patched_engine():
     # the fork injects no toast helper of its own.
     counters = patched.index("processed = converted = skipped = 0")
     milestone_init = patched.index("_next_milestone = 25")
-    start_toast = patched.index(
-        '_toast(f"Batch conversion started: {total} files")'
-    )
+    start_toast = patched.index('_toast(f"Batch conversion started: {total} files")')
     initial_write = patched.index('"processed": 0, "converted": 0, "skipped": 0,')
     assert counters < milestone_init < start_toast < initial_write
     # Milestone toast (upstream #1275): threshold-first-crossing guard at the
@@ -249,9 +247,7 @@ def test_single_helpers_guard_and_terminal_writes(tmp_path, monkeypatch):
     # A running BATCH record (no scope => != "single") must not be clobbered:
     # begin refuses (None) and end(None) is a no-op.
     prog.write_text(
-        json.dumps(
-            {"version": 1, "type": "inference", "status": "running", "total": 9}
-        )
+        json.dumps({"version": 1, "type": "inference", "status": "running", "total": 9})
     )
     ctx = ns["_infer_single_begin"]("/x/model.pth", "in.wav", "o/out.wav")
     assert ctx is None

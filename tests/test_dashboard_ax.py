@@ -137,9 +137,7 @@ def test_row_display_text_truncation():
 
 if __name__ == "__main__":
     fns = [
-        v
-        for k, v in sorted(globals().items())
-        if k.startswith("test_") and callable(v)
+        v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)
     ]
     for fn in fns:
         fn()

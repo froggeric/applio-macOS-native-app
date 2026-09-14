@@ -20,7 +20,9 @@ TERMINAL_STATUSES = {
     "interrupted",
 }
 LIVE_STATUSES = {"running", "paused"}
-assert not (LIVE_STATUSES & TERMINAL_STATUSES)  # statuses partition into live/terminal/other
+assert not (
+    LIVE_STATUSES & TERMINAL_STATUSES
+)  # statuses partition into live/terminal/other
 
 
 def count_live(snapshot):

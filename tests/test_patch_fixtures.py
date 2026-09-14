@@ -6,7 +6,6 @@ import importlib.util
 import os
 import py_compile
 import re
-import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,9 +20,9 @@ def _load(name, relpath):
 
 def _patched_core(tracking):
     src = open(os.path.join(REPO, "core.py"), encoding="utf8").read()
-    assert "_APPLIO_" not in src and "_track_process(" not in src, (
-        "core.py is dirty (patched?) - restore first"
-    )
+    assert (
+        "_APPLIO_" not in src and "_track_process(" not in src
+    ), "core.py is dirty (patched?) - restore first"
     content = src
     ok = 0
     for fn_name in (
@@ -54,11 +53,11 @@ def test_history_written_before_untrack():
         # enclosing function = nearest preceding top-level def
         fstart = patched.rfind("\ndef ", 0, u)
         fend = patched.find("\ndef ", u)
-        body = patched[fstart:fend if fend != -1 else len(patched)]
+        body = patched[fstart : fend if fend != -1 else len(patched)]
         h = body.find("_add_to_history(")
-        assert h != -1 and h < body.find("_untrack_process("), (
-            "untrack precedes history-add inside a tracked function"
-        )
+        assert h != -1 and h < body.find(
+            "_untrack_process("
+        ), "untrack precedes history-add inside a tracked function"
     # sanity: the patched output compiles
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tf:
         tf.write(patched)
@@ -90,9 +89,9 @@ def test_upload_scan_bounded_to_function_body():
 def test_progress_routes_patch():
     routes = _load("patch_progress_routes", "patches/patch_progress_routes.py")
     src = open(os.path.join(REPO, "app.py"), encoding="utf8").read()
-    assert "_APPLIO_A11Y_ROUTES_" not in src, (
-        "app.py is dirty (patched?) - restore first"
-    )
+    assert (
+        "_APPLIO_A11Y_ROUTES_" not in src
+    ), "app.py is dirty (patched?) - restore first"
     patched, status = routes.patch_app(src)
     assert status in ("patched", "already")
     assert "prevent_thread_lock=True,  # _APPLIO_A11Y_ROUTES_" in patched
@@ -115,9 +114,9 @@ def test_progress_routes_patch():
     launch = patched.find("Applio.launch(")
     ptl = patched.find("prevent_thread_lock=True,")
     kw = patched.find("allowed_paths=[")
-    assert launch != -1 and launch < ptl < kw, (
-        "launch kwargs not ordered inside the launch call"
-    )
+    assert (
+        launch != -1 and launch < ptl < kw
+    ), "launch kwargs not ordered inside the launch call"
     block = patched.find("applio_progress_api.register_routes(app)")
     tb = patched.find("from rvc.lib.tools.launch_tensorboard import get_tb_url")
     assert block != -1 and tb != -1 and block < tb
@@ -126,7 +125,9 @@ def test_progress_routes_patch():
     assert guard != -1 and keepalive != -1 and guard < keepalive
     repatched, status2 = routes.patch_app(patched)
     assert status2 == "already" and repatched == patched  # idempotent
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf8") as tf:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".py", delete=False, encoding="utf8"
+    ) as tf:
         tf.write(patched)
     try:
         py_compile.compile(tf.name, doraise=True)
@@ -138,9 +139,9 @@ def test_browse_buttons_patch():
     browse = _load("patch_browse_buttons", "patches/patch_browse_buttons.py")
     for rel, fields in browse.FIELDS.items():
         src = open(os.path.join(REPO, rel), encoding="utf8").read()
-        assert "_APPLIO_BROWSE_" not in src, (
-            f"{rel} is dirty (patched?) - restore first"
-        )
+        assert (
+            "_APPLIO_BROWSE_" not in src
+        ), f"{rel} is dirty (patched?) - restore first"
         patched, status = browse.patch_file(src, fields, browse.MARKERS[rel])
         # A skip here means a field var drifted upstream and its button would
         # silently never ship - fail loudly (patcher's skip warnings print above).
@@ -151,13 +152,11 @@ def test_browse_buttons_patch():
         )
         i18n_idx = patched.find("i18n = I18nAuto()")
         imp_idx = patched.find("import applio_browse_ui  # _APPLIO_BROWSE_IMPORT_")
-        assert i18n_idx != -1 and imp_idx > i18n_idx, (
-            f"{rel}: import not after i18n anchor"
-        )
+        assert (
+            i18n_idx != -1 and imp_idx > i18n_idx
+        ), f"{rel}: import not after i18n anchor"
         for var, mode in fields:
-            line = (
-                f'_applio_browse_{var} = applio_browse_ui.browse_button("{mode}", {var},'
-            )
+            line = f'_applio_browse_{var} = applio_browse_ui.browse_button("{mode}", {var},'
             assert line in patched, f"{rel}: wrong mode/target on {var}"
             # The validation-attach line must NOT contain "_applio_browse_"
             # (the count assertion above pins that substring to exactly one
@@ -172,9 +171,9 @@ def test_browse_buttons_patch():
             assert m, f"{rel}: definition for {var} vanished"
             end = browse._find_statement_end(patched, m.end() - 1)
             ins = patched.find(f"_applio_browse_{var} = ")
-            assert end != -1 and ins > end, (
-                f"{rel}: {var} browse line before its definition"
-            )
+            assert (
+                end != -1 and ins > end
+            ), f"{rel}: {var} browse line before its definition"
             # Only whitespace (the blank line + indent) between the closing
             # paren and the factory line = immediately after the statement,
             # before the next one.
@@ -215,9 +214,7 @@ def test_browse_buttons_patch():
 def test_web_payload_patch():
     payload = _load("patch_web_a11y_payload", "patches/patch_web_a11y_payload.py")
     src = open(os.path.join(REPO, "app.py"), encoding="utf8").read()
-    assert "_APPLIO_A11Y_JS_" not in src, (
-        "app.py is dirty (patched?) - restore first"
-    )
+    assert "_APPLIO_A11Y_JS_" not in src, "app.py is dirty (patched?) - restore first"
     patched, status = payload.patch_app(src)
     assert status in ("patched", "already")
     assert "def _applio_a11y_js(" in patched and "_APPLIO_A11Y_JS_" in patched

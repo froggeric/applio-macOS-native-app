@@ -56,8 +56,11 @@ def test_training_metrics_enrichment():
 
 def test_payload_shape_and_settings_echo():
     payload = api.build_progress_payload(
-        jobs=[_training_job()], settings={"verbosity": "verbose", "sound": True},
-        announce_owner="native", now=123.5, words={"training:voice": "failed"},
+        jobs=[_training_job()],
+        settings={"verbosity": "verbose", "sound": True},
+        announce_owner="native",
+        now=123.5,
+        words={"training:voice": "failed"},
     )
     assert payload["now"] == 123.5
     assert payload["announce"] == {"owner": "native"}
@@ -129,7 +132,9 @@ def test_nav_token_fires_callback_once():
 
 def test_owner_per_request():
     api.set_announce_owner("native")
-    assert api.handle_progress(client="native", now=1.0)["announce"]["owner"] == "native"
+    assert (
+        api.handle_progress(client="native", now=1.0)["announce"]["owner"] == "native"
+    )
     # external browser (no client flag) hears web announcements
     assert api.handle_progress(client=None, now=1.0)["announce"]["owner"] == "web"
 

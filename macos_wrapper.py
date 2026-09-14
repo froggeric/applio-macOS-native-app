@@ -1419,10 +1419,8 @@ class ApplioApp:
                                 if len(clean) > 60:
                                     clean = clean[:57] + "..."
                                 self.technical_detail = clean
-                                if (
-                                    self.stage == "1/4"
-                                    and self.sub_heading
-                                    == _t("Initializing environment...")
+                                if self.stage == "1/4" and self.sub_heading == _t(
+                                    "Initializing environment..."
                                 ):
                                     self.sub_heading = _t("Configuring Runtime...")
 

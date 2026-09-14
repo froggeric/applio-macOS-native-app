@@ -122,9 +122,9 @@ def test_play_sound_cue_channels():
     assert applio_launcher._play_sound_cue(False, _runner=fake_runner) == "afplay"
     assert calls[0][0] == ("/usr/bin/afplay", "/System/Library/Sounds/Basso.aiff")
     assert calls[1][0] == ("/usr/bin/afplay", "/System/Library/Sounds/Glass.aiff")
-    assert calls[0][1] == _sp.DEVNULL and calls[0][2] == _sp.DEVNULL, (
-        "the afplay child must be detached and quiet (main thread never blocks)"
-    )
+    assert (
+        calls[0][1] == _sp.DEVNULL and calls[0][2] == _sp.DEVNULL
+    ), "the afplay child must be detached and quiet (main thread never blocks)"
 
     # afplay (or the .aiff) missing -> NSSound fallback branch, still no raise
     calls.clear()
