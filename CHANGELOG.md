@@ -5,6 +5,12 @@ All notable changes to this macOS-native fork of Applio. Versions follow
 
 ## [Unreleased]
 
+## [3.6.4.2] — 2026-09-14
+
+Third fork release on the upstream 3.6.4 base. Since the last released build (3.6.4.0,
+2026-08-13) this carries the completed accessibility program (all eight of our upstream
+PRs merged — the last, #1280, landed 2026-09-11), the quit gate, and two upstream syncs.
+
 ### Changed
 
 - **Upstream sync 2026-09-11 (5 commits).** Conflict-free merge. Headline upstream changes:

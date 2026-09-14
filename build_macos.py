@@ -89,7 +89,7 @@ import PyInstaller.__main__
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-BUILD_NUMBER = 1  # 3.6.4.1: a11y phases 3-4f, quit gate, syncs 2026-08-25 + 2026-09-02
+BUILD_NUMBER = 2  # 3.6.4.2: PR #1280 merged (8/8 a11y program), sync 2026-09-11
 
 
 # Read version from the tracked assets/config_template.json first (the source of

@@ -616,7 +616,9 @@ defaults write com.iahispano.applio a11y.sound_cues -bool false
 
 The language picker shows each language in its own spelling (Français, 日本語, …) while the
 saved setting stays the raw locale code — part of the same accessibility work, contributed
-upstream as IAHispano/Applio #1281.
+upstream as IAHispano/Applio #1281. File dropdowns (models, audio paths) likewise show
+friendly names rather than raw paths, contributed upstream as #1280; with a screen reader
+each option reads as its name instead of a long file path.
 
 ## Architecture
 

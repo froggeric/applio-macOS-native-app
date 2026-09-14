@@ -1111,3 +1111,16 @@ bug: en_US key "Language automatically detected in the system" dropped by 0724dd
 still references it (key-fallback makes English identical; non-English loses one string) — worth a
 one-line upstream note. Smoke notes: /gradio_api/config 404s in 6.20 (component config at /config);
 first poll can hit pre-route-registration 404 — poll for payload shape.
+
+### Upstream sync 2026-09-11 + release 3.6.4.2 — gated, pushed
+5 upstream commits: **PR #1280 MERGED — the upstream a11y program closes 8/8** (friendly
+dropdown names in inference/realtime/train/tts), black run over main (moved app.py's
+allowed_paths spacing; our anchor already tolerated both), discriminator-gradients-off
+generator-loss optimisation, model-info fix. Zero patcher re-pointing: all 29 entries
+applied + compiled clean; browse_buttons anchors sit on component definitions, untouched
+by #1280's choices rewrite; progress_routes' patched output verified single-kwarg.
+113/113 (the long-standing "114" tally was off by one; test_inference_progress has no
+__main__ runner — bare per-file invocation imports it silently, use -m pytest). Gated
+build green; 3.6.4.2 cut 2026-09-14 (formatter PR #2 merged first). Track C (gradio) had
+closed issue-first on 2026-09-02: gradio paused outside PRs, so issue #13813 + the
+branch-pointer comment is that contribution.
