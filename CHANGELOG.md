@@ -5,6 +5,21 @@ All notable changes to this macOS-native fork of Applio. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- **Upstream sync 2026-09-11 (5 commits).** Conflict-free merge. Headline upstream changes:
+  **our PR #1280 merged — the upstream accessibility program is now 8/8** (friendly names in
+  the file dropdowns: `tabs/inference`, `tabs/realtime`, `tabs/train`, `tabs/tts` now render
+  `(label, value)` tuple choices); fdec9456 black format run over main (moved `app.py`'s
+  `allowed_paths = ["logs"]` to the unspaced form); 7fa68ec2 disables discriminator gradients
+  during generator-loss evaluation in `rvc/train/train.py` (training perf); 9b70d059 model-info
+  output fix. **Zero patcher re-pointing needed this round**: all 29 registered patch entries
+  applied and compiled clean against the merged tree (browse_buttons' anchors sit on the
+  component definitions, which #1280's choices rewrite does not touch;
+  `patch_progress_routes`' `allowed_paths` anchor already tolerates both spacings and its
+  patched output was verified to keep the single-kwarg extension). 113/113 tests across the
+  14 suites; gated cert-free build green.
+
 ## [3.6.4.1] — 2026-09-02
 
 First fork release on upstream 3.6.4: the full accessibility program (four manual VoiceOver

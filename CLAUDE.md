@@ -115,7 +115,11 @@ assets/
 - **Owner gate on every PR**: draft text to `docs/upstream-prs/NN-*.md` → owner edits/reviews →
   explicit submit command. Default to `--draft`; "actually submit" means ready. Never alter the
   owner's wording (typos included). Series to date: #1270-#1281 (wiring, toasts ×4, labels,
-  headings, tuple choices, i18n strings + native language names).
+  headings, tuple choices, i18n strings + native language names) — **ALL EIGHT MERGED, program
+  complete** (#1280 merged 2026-09-11). The gradio leg (statustracker ARIA) closed
+  issue-first: gradio PAUSED outside PRs (CONTRIBUTING 2ae6f97d); issue #13813 + a
+  branch-pointer comment is the contribution — see
+  `docs/upstream-prs/09-statustracker-aria.md` and memory track-c-gradio-aria.
 - **en_US.json rule** (maintainer, learned on #1277): new user-visible strings ship WITH their
   en_US.json keys in the same PR (key=value, alphabetical; their automation syncs all locales).
 - **PR-text discipline**: verify every claim against LIVE upstream (counts, cited pre-existing
@@ -147,7 +151,18 @@ git merge upstream/main
 ```
 
 The fork keeps macOS work in separate files, so the git merge is nearly conflict-free
-(last sync within 3.6.4 on 2026-09-02, 20 commits: **conflict-free** — brought in our own
+(last sync 2026-09-11, 5 commits: **conflict-free, ZERO patcher re-pointing** — our PR
+**#1280 merged, closing the upstream a11y program at 8/8** (tuple-choices friendly names in
+inference/realtime/train/tts dropdowns); fdec9456 black format run (moved app.py's
+`allowed_paths = ["logs"]` to unspaced — `patch_progress_routes`' anchor already tolerates
+both, patched output verified single-kwarg); 7fa68ec2 discriminator-gradients-off during
+generator-loss eval in `rvc/train/train.py`; 9b70d059 model-info fix. All 29 patch entries
+applied + compiled clean (browse_buttons anchors sit on component definitions, untouched by
+#1280's choices rewrite). 113/113 across 14 suites. NOTE: `tests/test_inference_progress.py`
+has NO `__main__` runner — bare `venv_macos/bin/python tests/x.py` imports it silently
+(exit 0, no tests run!); invoke `venv_macos/bin/python -m pytest
+tests/test_inference_progress.py`. Prior sync within 3.6.4 on 2026-09-02, 20 commits:
+**conflict-free** — brought in our own
 upstreamed a11y PRs #1281 (i18n strings + language names), #1276 (extra job toasts), #1277
 (label clarity), #1278 (section headings), plus fd7c034a multi-speaker training, #1274 rmvpe
 high-register, TF32, TensorBoard/model-info/model-blend fixes, and "Update translations";
