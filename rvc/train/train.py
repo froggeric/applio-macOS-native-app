@@ -125,7 +125,7 @@ try:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 except Exception as e:
-    print(f'Torch tf32: {e}')
+    print(f"Torch tf32: {e}")
 
 global_step = 0
 last_loss_gen_all = 0
@@ -369,7 +369,7 @@ def run(
     # Try to load speaker dim from latest checkpoint
     try:
         chk_path = latest_checkpoint_path(experiment_dir, "G_*.pth")
-        
+
         if chk_path:
             ckpt = torch.load(chk_path, map_location="cpu", weights_only=True)
             spk_dim = ckpt["model"]["emb_g.weight"].shape[0]
@@ -472,7 +472,9 @@ def run(
                 ckpt = torch.load(pretrainG, map_location="cpu", weights_only=True)[
                     "model"
                 ]
-                print(f"Overriding the pretrain speaker embedding size to {spk_dim} speakers.")
+                print(
+                    f"Overriding the pretrain speaker embedding size to {spk_dim} speakers."
+                )
                 if hasattr(net_g, "module"):
                     ckpt["emb_g.weight"] = net_g.module.emb_g.weight.detach().clone()
                     net_g.module.load_state_dict(ckpt)
@@ -698,6 +700,8 @@ def train_and_evaluate(
                     grad_norm_d = commons.grad_norm(net_d.parameters())
                     optim_d.step()
 
+            net_d.requires_grad_(False)
+
             with torch.amp.autocast(
                 device_type="cuda", enabled=use_amp, dtype=train_dtype
             ):
@@ -750,6 +754,8 @@ def train_and_evaluate(
                 loss_gen_all.backward()
                 grad_norm_g = commons.grad_norm(net_g.parameters())
                 optim_g.step()
+
+            net_d.requires_grad_(True)
 
             global_step += 1
 
