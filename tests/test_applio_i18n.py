@@ -97,7 +97,8 @@ def test_corrupt_locale_json_falls_back():
     tmp = _make_tree("xx_XX")
     # Overwrite the locale file with a JSON list -> not a dict.
     with open(
-        os.path.join(tmp, "assets", "i18n", "languages", "xx_XX.json"), "w",
+        os.path.join(tmp, "assets", "i18n", "languages", "xx_XX.json"),
+        "w",
         encoding="utf8",
     ) as fh:
         fh.write("[1, 2, 3]")

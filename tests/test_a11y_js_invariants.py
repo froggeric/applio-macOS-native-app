@@ -22,18 +22,18 @@ def _function_body(name):
 
 def test_heal_record_toggles_scoped_to_browse_anchor():
     body = _function_body("healRecordToggles")
-    assert "#browse-record_audio_path" in body, (
-        "healRecordToggles must anchor on the fork-injected Browse button"
-    )
-    assert 'document.querySelectorAll("button")' not in body, (
-        "healRecordToggles must not scan the whole document for Start/Stop"
-    )
-    assert "closest" in body and "querySelectorAll" in body, (
-        "healRecordToggles must scope via closest() then query within"
-    )
-    assert "ACCORDION_BLOCK" in body, (
-        "scope must be the live-verified .gr-accordion container"
-    )
+    assert (
+        "#browse-record_audio_path" in body
+    ), "healRecordToggles must anchor on the fork-injected Browse button"
+    assert (
+        'document.querySelectorAll("button")' not in body
+    ), "healRecordToggles must not scan the whole document for Start/Stop"
+    assert (
+        "closest" in body and "querySelectorAll" in body
+    ), "healRecordToggles must scope via closest() then query within"
+    assert (
+        "ACCORDION_BLOCK" in body
+    ), "scope must be the live-verified .gr-accordion container"
 
 
 def test_failed_tail_wiring_present():
@@ -51,12 +51,12 @@ def test_job_label_scope_aware():
     # mapping must key on type "inference" (unchanged; enrich_jobs keys on it)
     # and fall through to "batch inference" when scope is absent (a batch).
     body = _function_body("jobLabel")
-    assert 'job.scope === "single"' in body, (
-        "jobLabel must map payload scope single -> conversion"
-    )
-    assert '"conversion"' in body and '"batch inference"' in body, (
-        "jobLabel must render conversion vs batch inference"
-    )
+    assert (
+        'job.scope === "single"' in body
+    ), "jobLabel must map payload scope single -> conversion"
+    assert (
+        '"conversion"' in body and '"batch inference"' in body
+    ), "jobLabel must render conversion vs batch inference"
     assert 't = job.type || "process"' in body, "non-inference types pass through"
 
 
@@ -69,18 +69,16 @@ def test_output_change_speech_removed():
     with open(JS, encoding="utf8") as fh:
         src = fh.read()
     body = _function_body("announceOutputChanges")
-    assert "persistResult(short)" in body, (
-        "the visible Last-result record must survive"
-    )
-    assert "announce(" not in body, (
-        "output changes must never SPEAK (jobs own the spoken channel)"
-    )
-    assert "jobsRunning" not in src, (
-        "the jobsRunning flag is dead once no speech path reads it"
-    )
-    assert "verbosityNow" not in src, (
-        "verbosityNow was only read by the removed output-change gate"
-    )
+    assert "persistResult(short)" in body, "the visible Last-result record must survive"
+    assert (
+        "announce(" not in body
+    ), "output changes must never SPEAK (jobs own the spoken channel)"
+    assert (
+        "jobsRunning" not in src
+    ), "the jobsRunning flag is dead once no speech path reads it"
+    assert (
+        "verbosityNow" not in src
+    ), "verbosityNow was only read by the removed output-change gate"
 
 
 def test_one_combined_announce_per_poll():
@@ -89,13 +87,13 @@ def test_one_combined_announce_per_poll():
     # textContent, so per-event calls overwrite each other and only the last
     # is heard. The owner/verbosity gate around the spoken path is unchanged.
     body = _function_body("handlePayload")
-    assert "forEach(function (a) { announce(a[1]); })" not in body, (
-        "per-event announce() calls stomp each other — join into one call"
-    )
+    assert (
+        "forEach(function (a) { announce(a[1]); })" not in body
+    ), "per-event announce() calls stomp each other — join into one call"
     assert '.join(" — ")' in body, "events must be combined via join"
-    assert len(re.findall(r"\bannounce\(", body)) == 1, (
-        "handlePayload must contain exactly one announce() call (combined)"
-    )
+    assert (
+        len(re.findall(r"\bannounce\(", body)) == 1
+    ), "handlePayload must contain exactly one announce() call (combined)"
 
 
 def run_all():

@@ -14,7 +14,11 @@ def test_pick_ui_config_modes():
         "dirs": True,
         "allowed": None,
     }
-    assert picker.pick_ui_config("file") == {"files": True, "dirs": False, "allowed": None}
+    assert picker.pick_ui_config("file") == {
+        "files": True,
+        "dirs": False,
+        "allowed": None,
+    }
     assert picker.pick_ui_config("pth") == {
         "files": True,
         "dirs": False,

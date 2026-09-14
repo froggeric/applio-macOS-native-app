@@ -50,7 +50,7 @@ ALLOWED_PATHS_EXT = (
     "        ],"
 )
 
-INJECTED = '''    # {marker}
+INJECTED = """    # {marker}
     try:
         import applio_progress_api
 
@@ -62,7 +62,7 @@ INJECTED = '''    # {marker}
 
         while True:  # keep this backend thread alive; launch() no longer blocks
             _applio_time.sleep(5)
-'''
+"""
 
 
 def patch_app(content):

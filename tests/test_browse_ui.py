@@ -41,7 +41,9 @@ def test_browse_button_creates_and_wires():
         box = gr.Textbox(label="x")
         btn = applio_browse_ui.browse_button("file", box, elem_id="browse-test")
         assert isinstance(btn, gr.Button)
-        assert btn.elem_id == "browse-test"  # falsible: the factory must pass it through
+        assert (
+            btn.elem_id == "browse-test"
+        )  # falsible: the factory must pass it through
 
 
 def _with_recorded_warnings(fn):

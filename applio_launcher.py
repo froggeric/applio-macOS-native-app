@@ -896,9 +896,7 @@ def _menu_job_title(proc, training_epoch=None):
         else:
             pct = int(round(compute_inference_stats(proc, time.time())["pct"]))
             seg = f"{pct}%"
-        title = (
-            f"{_t('Inference')}: {name} — {seg} ({processed}/{total} {_t('files')})"
-        )
+        title = f"{_t('Inference')}: {name} — {seg} ({processed}/{total} {_t('files')})"
     elif ptype == "training":
         name = _short(proc.get("model_name"))
         total_epoch = proc.get("total_epoch")

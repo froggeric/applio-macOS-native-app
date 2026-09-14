@@ -138,9 +138,9 @@ def test_a11y_menu_gone():
     import menu_spec
 
     for leaf in iter_leaves(menu_spec.MENU):
-        assert not (leaf.key or "").startswith("a11y."), (
-            f"stale a11y menu item {leaf.key!r}"
-        )
+        assert not (leaf.key or "").startswith(
+            "a11y."
+        ), f"stale a11y menu item {leaf.key!r}"
     assert not hasattr(menu_spec, "A11Y_CHILD_KEYS"), "stale a11y key-set machinery"
     assert not hasattr(menu_spec, "A11Y_KEYS"), "stale a11y key-set machinery"
     assert not any(k.startswith("a11y.") for k in menu_spec.TAXONOMY)

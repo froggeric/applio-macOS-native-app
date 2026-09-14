@@ -59,7 +59,9 @@ class NativeI18n:
                 with open(override_path, "r", encoding="utf8") as fh:
                     overrides = json.load(fh)
                 if not isinstance(overrides, dict):
-                    raise ValueError(f"overrides file is not an object: {override_path}")
+                    raise ValueError(
+                        f"overrides file is not an object: {override_path}"
+                    )
                 layer = overrides.get(self.language, {})
                 if isinstance(layer, dict):
                     self._map.update(layer)
@@ -82,9 +84,7 @@ class NativeI18n:
                     # Upstream semantics (assets/i18n/i18n.py:24-30): first
                     # available language whose name startswith(locale[:2]).
                     prefix = sys_locale.split("_")[0][:2]
-                    languages_dir = os.path.join(
-                        base, "assets", "i18n", "languages"
-                    )
+                    languages_dir = os.path.join(base, "assets", "i18n", "languages")
                     try:
                         available = sorted(
                             f[:-5]
@@ -93,9 +93,7 @@ class NativeI18n:
                         )
                     except OSError:
                         available = []
-                    matching = [
-                        lang for lang in available if lang.startswith(prefix)
-                    ]
+                    matching = [lang for lang in available if lang.startswith(prefix)]
                     if matching:
                         return matching[0]
                 break

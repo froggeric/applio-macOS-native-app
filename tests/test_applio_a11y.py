@@ -114,9 +114,7 @@ def test_word_key_overrides_snapshot_key_for_terminal_word():
             }
         }
     )
-    events = pol.events(
-        {}, terminal_words={"training:voice": "failed"}
-    )
+    events = pol.events({}, terminal_words={"training:voice": "failed"})
     assert ("terminal", "training: voice failed") in events
 
 
@@ -127,15 +125,26 @@ def test_missing_keys_is_readonly():
     assert missing == {"a:1"}
     assert set(pol._seen) == {"a:1"}  # _seen untouched
     # steady state: nothing missing
-    assert pol.missing_keys({"a:1": {"type": "a", "name": "x", "status": "running"}}) == set()
+    assert (
+        pol.missing_keys({"a:1": {"type": "a", "name": "x", "status": "running"}})
+        == set()
+    )
 
 
 def test_two_jobs_same_type_name_distinct_keys():
     pol = applio_a11y.AnnouncementPolicy()
     pol.prime({})
     snap = {
-        "training:voice:111": {"type": "training", "name": "voice", "status": "running"},
-        "training:voice:222": {"type": "training", "name": "voice", "status": "running"},
+        "training:voice:111": {
+            "type": "training",
+            "name": "voice",
+            "status": "running",
+        },
+        "training:voice:222": {
+            "type": "training",
+            "name": "voice",
+            "status": "running",
+        },
     }
     starts = [e for e in pol.events(snap) if e[0] == "start"]
     assert len(starts) == 2

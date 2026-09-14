@@ -19,7 +19,7 @@ MARKER = "_APPLIO_A11Y_JS_"
 JS_ANCHOR = re.compile(
     r'"js": \(\n'
     r"(?P<body>(?:.*\n)*?)"
-    r'(?P<close>\s*\),\n)'  # the entry's closing paren before the dict close
+    r"(?P<close>\s*\),\n)"  # the entry's closing paren before the dict close
 )
 
 HELPER = '''def _applio_a11y_js(client_mode):  # {marker}
@@ -66,7 +66,7 @@ def patch_app(content):
     content = (
         content[: m.start()]
         + '"js": _applio_a11y_js(client_mode),\n'
-        + content[m.end():]
+        + content[m.end() :]
     )
     # Insert the helper immediately before launch_gradio, which calls it
     # (re-located on the spliced text: no ordering assumption).
