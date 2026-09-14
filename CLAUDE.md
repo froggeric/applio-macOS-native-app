@@ -124,6 +124,8 @@ assets/
   en_US.json keys in the same PR (key=value, alphabetical; their automation syncs all locales).
 - **PR-text discipline**: verify every claim against LIVE upstream (counts, cited pre-existing
   labels); no AI tells — the owner wants PRs to read human and edits them personally.
+- **User-facing text style** (release notes and anything users read, owner-specified): human, no fluff,
+  no em-dashes, no AI tells, British English.
 - **CRLF trap**: `tabs/inference/inference.py` is CRLF upstream — rewrites must preserve it or
   the diff explodes to whole-file.
 - **Owner test builds**: `test/NN-app` branch = fork main + merge the PR branch + re-drop the
@@ -198,6 +200,11 @@ after an upstream sync" below), because upstream rewrites the source our `patche
   (module-level `patched_files = pre_build_patch()` → PyInstaller), so **never `import build_macos`** for testing.
   Instead run each patcher directly, e.g. `venv_macos/bin/python patches/patch_X.py <arg>`,
   then `git checkout -- <source>` to restore.
+- The full registration lives in `build_macos.py pre_build_patch()` (`patches_to_apply`; "dir" = pass
+  dirname, "file" = pass full path). To drive ALL patchers at once + `py_compile` every target, AST-extract
+  that list into a throwaway script (`ast.walk` for the `patches_to_apply` Assign + `literal_eval`; NEVER
+  import build_macos) and run it with venv_macos python; restore with `git checkout -- assets core.py rvc
+  tabs app.py`. Used in the 2026-09-11 sync: 29/29 applied, 0 compile failures, one command.
 - Each patcher prints `Pattern not found` / `patch failed` when upstream changed its anchor;
   re-point the regex/string to the new code, then verify the patched file `py_compile`s and the
   injected code is correctly placed before committing.
@@ -400,6 +407,9 @@ history browsing.
 - **Background build exit codes:** don't end a backgrounded build with `; echo "exit=$?"` - the task reports the
   LAST command's exit (the echo = 0), masking a failed build. Make the build the final command and read its real
   exit/output (`tail` the output file, check for `BUILD COMPLETE` / hard-fail markers).
+- **Background build logs:** never PIPE the build (`| tail`/`| head`) - the output FILE keeps only what
+  passed the pipe, so post-verification (patcher tallies, failure greps over the PRE-BUILD section) loses
+  the top of the log. Run the build bare; grep the output file afterwards.
 - **Cert-free gates for signing changes:** a plain `build_macos.py` run (no `--sign`) is safe (`--help`/`py_compile`
   exit before the module-level build) and verifies `CFBundleVersion` in the built Info.plist + git-cleanliness
   without the cert; unit-test Mach-O detection by copying the fn to a temp script (`import build_macos` runs the build).
