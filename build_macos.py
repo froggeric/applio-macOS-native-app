@@ -2138,7 +2138,7 @@ if os.path.exists(app_path):
     if NOTARIZE:
         print(f"  Notarized:  {'Yes' if notarize_success else 'Failed'}")
 
-    print(f"\n  Note: Models (~2GB) will download on first launch")
+    print(f"\n  Note: Models (about 3 GB) will download on first launch")
 
     print("=" * 60)
 else:
