@@ -419,7 +419,8 @@ history browsing.
   it into fork-owned code or add it to HIDDEN_IMPORTS (a `from rvc... import ...` of a data-only
   module works in dev and fails frozen).
 - **Reproduce frozen-subprocess behavior without the GUI:** `dist/Applio.app/Contents/MacOS/Applio
-  /tmp/script.py args` - entry `applio_launcher.py` dispatches to the script (CWD=bundle).
+  /tmp/script.py args` - entry `applio_launcher.py` dispatches to the script (working directory =
+  the data location; pass an ABSOLUTE script path).
 - **Testing the frozen app without touching the owner's data:**
   - `APPLIO_DATA_PATH=<test folder>` pins the data location for one run. Seed it with a clone
     of `rvc/models` (`cp -cR rvc/models <folder>/rvc/`). Drivers are in git-ignored
