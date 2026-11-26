@@ -1,7 +1,7 @@
 # Manual test plan: Applio macOS 3.7.2.1
 
 **Build under test:** `3.7.2.1` (signed and notarized: `dist/Applio.app` and `dist/Applio-3.7.2.1.dmg`)
-**Previous build to compare with:** `3.6.4.2`
+**Previous build to compare with:** `3.6.2.5` (`Applio.app` in `/Volumes/ssd/ai/`, the only other copy found on this Mac)
 **Your data location:** `/Volumes/ssd/ai/applio`
 **Time needed:** about 45 to 60 minutes for sections 1 to 4 and 6. Training time and the optional sections come on top.
 
@@ -12,17 +12,17 @@ Each step says what to do and what you should see. Section 9 is the list to fill
 1. Test the upgrade on a copy of your data first. In Terminal:
    ```bash
    cp -cR /Volumes/ssd/ai/applio /Volumes/ssd/ai/applio-372-test
-   APPLIO_DATA_PATH=/Volumes/ssd/ai/applio-372-test /Applications/Applio.app/Contents/MacOS/Applio
+   open -n --env "APPLIO_DATA_PATH=/Volumes/ssd/ai/applio-372-test" "/Volumes/ssd/github/applio-macOS-native-app/dist/Applio.app"
    ```
-   That run uses the copy and leaves your saved data location untouched. Start the app normally (double-click) only once section 1 passes.
-2. Keep the old app for side-by-side comparisons, under a different name.
+   The copy takes seconds and needs no extra space until files change. Expect: the loading screen shows `Applio v3.7.2.1`, then the main window appears with your models. Quit with ⌘Q. That run changed only the copy, not your saved data location. Go on with section 1 only if it worked. If you repeat this step, delete `applio-372-test` in Finder first.
+2. Your previous build is `Applio.app` (3.6.2.5) in `/Volumes/ssd/ai/`. In Finder, rename it to `Applio 3.6.2.5.app` and keep it for the comparison in 2.2. Run one version at a time: quit one with ⌘Q before you open the other.
 3. Logs are in `~/Library/Logs/Applio/`: `applio_launcher.log` and `applio_wrapper.log`.
 4. Already checked automatically, so you need not repeat it unless you want to. On the unsigned test build made from the same sources: start against a separate data folder that imitated a 3.6.4 installation (old translations and scripts replaced, settings kept and completed); preprocessing; feature extraction on Metal; training with pause and resume; training again for more epochs; training from a 44 kHz RefineGAN-Legacy pretrained pair; index generation; RefineGAN-Legacy conversion; a training started through the interface with its start and end announcements. On the signed build itself: single, batch (stopped, then completed) and text-to-speech conversion; start with the window; the 13 Browse buttons in a browser; quit.
 5. Not checked on this build, so your results count most there: VoiceOver itself, the native file and folder dialogs of the Browse buttons, the buttons of the Process Dashboard, real-time conversion, and a fresh installation.
 
-## 1. Install and first start (upgrade from 3.6.4.2)
+## 1. Install and first start (upgrade from 3.6.2.5)
 
-1.1 Do: open the DMG, drag Applio to Applications (replace), open it.
+1.1 Do: open the DMG (`dist/Applio-3.7.2.1.dmg`), drag Applio to `/Volumes/ssd/ai/` (where the old copy is), open it.
 Expect: it opens without a warning. One Dock icon. The loading screen shows `Applio v3.7.2.1`. The main window appears in under a minute because your models are there (about 7 seconds in the automated runs).
 
 1.2 Do: look at the window.
@@ -38,14 +38,14 @@ Expect: no update is offered. The newest published release is 3.6.4.2.
 Expect: `assets/config_template.json` sits next to `assets/config.json`. Your settings in `config.json` are unchanged, two keys were added (`logs_dir`, `rmvpe_high_register`) and `"version"` reads `3.7.2`. `assets/i18n/languages` holds the 15 current language files; files of languages the app no longer ships may still be there, which does no harm.
 
 1.6 Do: open the two log files.
-Expect in `applio_wrapper.log`: `Version: 3.7.2.1`, `Added new default settings to …/assets/config.json`, `Gradio backend is responsive.` and `Transitioning to main UI...`. No line with `ERROR`.
+Expect in `applio_wrapper.log`, from its last line `Version: 3.7.2.1` onwards: `Added new default settings to …/assets/config.json`, `Gradio backend is responsive.` and `Transitioning to main UI...`. No line with `ERROR` from there to the end of the file.
 
 ## 2. Converting audio
 
 2.1 Do: convert one file with a model you know well (RMVPE, default settings).
-Expect: the result plays and sounds at least as good as with 3.6.4.2. The Terminal tab shows `Using Apple Silicon MPS for inference`.
+Expect: the result plays and sounds at least as good as with the previous build. The Terminal tab shows `Using Apple Silicon MPS for inference`.
 
-2.2 Do: convert one file in 3.6.4.2 as well and compare.
+2.2 Do: quit, convert the same file in the previous build (`Applio 3.6.2.5`) and compare.
 Expect: the same character. A difference in quality is worth a report, with both files.
 
 2.3 Do: batch-convert a folder with 10 or more files.
@@ -97,7 +97,7 @@ Expect: it continues from the saved epoch. The loss curve in the dashboard shows
 Expect: both work.
 
 3.8 Do: train at 44.1 kHz with Pretrained ticked and HiFi-GAN.
-Expect: the log says no 44.1 kHz pretrains are installed and training continues without them, as on 3.6.4.2.
+Expect: the log says no 44.1 kHz pretrains are installed and training continues without them, as before.
 
 3.9 Do: tick Custom Pretrained and open Pretrained Custom Settings.
 Expect: the two dropdowns list your downloaded custom pretrains. Each has a Browse button. Train at 44.1 kHz with a KLM50 or VCTK 44 kHz pair and vocoder RefineGAN: the log shows `Detected legacy RefineGAN architecture`, training completes and the model converts.
@@ -137,8 +137,8 @@ Expect: audio stops at once and the app stays responsive.
 
 ## 6. Data location and files
 
-6.1 Do: menu File, Set Data Location, choose another folder, restart the app.
-Expect: the app uses the new folder. On 3.6.4.2 this menu item had no effect.
+6.1 Do: menu File, Set Data Location, choose `/Volumes/ssd/ai/applio-372-test` (the copy from step 0.1), restart the app.
+Expect: the app uses the copy. Menu File, Open in Finder, Logs opens the `logs` folder inside the copy. The menu item used to save its choice under a name the app never read; that is fixed in this build.
 
 6.2 Do: choose `/Volumes/ssd/ai/applio` back and restart.
 Expect: back to normal, with all your models and settings.
@@ -146,20 +146,23 @@ Expect: back to normal, with all your models and settings.
 6.3 Do: use the File, Open in Finder items (logs, audios, datasets, models).
 Expect: each opens the right folder inside your data location.
 
-6.4 Do: in Terminal:
+6.4 Do: quit the app. In Terminal:
    ```bash
-   APPLIO_DATA_PATH=/tmp/applio-test /Applications/Applio.app/Contents/MacOS/Applio
+   open -n --env "APPLIO_DATA_PATH=/Volumes/ssd/ai/applio-372-test" "/Volumes/ssd/ai/Applio.app"
    ```
-   Expect: the app runs against that folder for this one launch, with no first-run prompt, and your saved location is untouched.
+   Expect: the app runs against the copy for this one launch, with no prompt, and the saved location is untouched. Quit it. The next normal start uses the saved location again.
 
 ## 7. Fresh installation (optional)
 
 Nothing here must touch your real data or settings.
 
-7.1 Do: use a new macOS user account, or run the binary with `APPLIO_DATA_PATH` pointing at an empty folder (6.4).
-Expect: the folder selection dialog appears.
+7.1 Do: use a new macOS user account and start the app there, or run the installed app against an empty folder. In Terminal:
+   ```bash
+   open -n --env "APPLIO_DATA_PATH=/Volumes/ssd/ai/applio-fresh-test" "/Volumes/ssd/ai/Applio.app"
+   ```
+   Expect: in the new account the folder selection dialog appears. With `APPLIO_DATA_PATH` there is no dialog: the folder is created and used directly.
 
-7.2 Do: choose an empty folder.
+7.2 Do: choose an empty folder (new account only).
 Expect: the loading screen shows the model download (about 2 GB). The app reaches the main window within 10 minutes.
 
 7.3 Do: look into the folder.
@@ -185,4 +188,4 @@ Fill in pass, fail or not tested for each number:
 2. What you expected and what happened.
 3. The time it happened, with `applio_launcher.log` and `applio_wrapper.log` from that session.
 4. Model, index, dataset and settings used.
-5. Whether it also happens on 3.6.4.2, and whether it changes with the GPU set to `-`.
+5. Whether it also happens on the previous build, and whether it changes with the GPU set to `-`.
