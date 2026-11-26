@@ -69,6 +69,19 @@ build now runs on Python 3.12.
 - `APPLIO_DATA_PATH` set before launch pins the data location for that run: no first-run
   prompt, and the saved preference is neither read nor written.
 
+### Internal (build and release)
+
+- **Notarization falls back to the stored app-specific password** when a Mac has no
+  notarytool profile `applio-notarize` but still holds the keychain item the fork used before
+  3.6.3.5. The build prints a line when it does. The profile is used whenever it exists.
+- 115/115 tests across the 14 suites. The frozen app was checked against a separate data
+  folder (preprocessing, extraction on Metal, training with pause and resume, a resumed
+  training that keeps its earlier epochs, RefineGAN-Legacy training and conversion, batch
+  inference with Stop, text-to-speech) and in window mode on a copy of a 3.6.4 installation
+  (files replaced, settings kept and completed, 13 Browse buttons, live jobs and
+  announcements). This build was signed and notarized locally; both submissions were
+  accepted.
+
 ## [3.6.4.2] — 2026-09-14
 
 Third fork release on the upstream 3.6.4 base. Since the last released build (3.6.4.0,
