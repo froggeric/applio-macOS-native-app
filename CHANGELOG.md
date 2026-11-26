@@ -43,6 +43,9 @@ build now runs on Python 3.12.
   RefineGAN-Legacy training patch had skipped its detection block. Both follow upstream's new
   code now. Upstream's own failure messages after each launch are kept: the training tab relies
   on them to raise a warning and to block the steps that follow a failed one.
+- **Training no longer writes `/tmp/applio_debug.txt` at every start.** The file is written only
+  when the environment variable `APPLIO_DEBUG` is set, and a failed write no longer stops
+  training.
 - **Conversion toasts are back.** Upstream 3.7 prints the batch start, progress and result
   lines instead of showing toasts; the fork shows them as toasts again.
 - **Training progress bars** in the Progress Monitor follow upstream's new format, so batches

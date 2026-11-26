@@ -830,6 +830,8 @@ PATCH_MARKERS = {
     ],
     "patches/patch_train_paths.py": [
         ("rvc/train/train.py", "_get_applio_logs_path", 1),
+        # The debug file is written through this helper only (guarded by APPLIO_DEBUG).
+        ("rvc/train/train.py", "_applio_debug_note(", 5),
     ],
     "patches/patch_mute_paths.py": [
         ("rvc/train/extract/preparing_files.py", "_get_mute_base_path", 1),

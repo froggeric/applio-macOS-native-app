@@ -43,7 +43,25 @@ def patch_train_py(base_path: str) -> bool:
         return False
 
     # Replacement: file-based path resolution function
-    path_resolution_code = '''def _get_applio_logs_path():
+    # The debug file is written only when APPLIO_DEBUG is set: /tmp is not
+    # writable under App Sandbox, and training must not depend on that write.
+    path_resolution_code = '''_APPLIO_DEBUG_FILE = "/tmp/applio_debug.txt"
+
+
+def _applio_debug_note(message):
+    """Append a line to the debug file when APPLIO_DEBUG is set in the environment."""
+    import os
+
+    if not os.environ.get("APPLIO_DEBUG"):
+        return
+    try:
+        with open(_APPLIO_DEBUG_FILE, "a") as _df:
+            _df.write(message + chr(10))
+    except OSError:
+        pass
+
+
+def _get_applio_logs_path():
     """Get logs path using FILE-BASED configuration (process-safe).
 
     This works across all process boundaries including PyTorch multiprocessing.
@@ -67,8 +85,7 @@ def patch_train_py(base_path: str) -> bool:
                     parent_dir = os.path.dirname(logs_path)
                     if os.path.exists(parent_dir):
                         result = os.path.dirname(logs_path)  # Return data_path (parent of logs)
-                        with open("/tmp/applio_debug.txt", "a") as _df:
-                            _df.write(f"=== _get_applio_logs_path (train.py): using config file: {result}\\n")
+                        _applio_debug_note(f"=== _get_applio_logs_path (train.py): using config file: {result}")
                         return result
             except (json.JSONDecodeError, IOError, KeyError):
                 pass
@@ -76,8 +93,7 @@ def patch_train_py(base_path: str) -> bool:
     # === Try environment variable ===
     env_path = os.environ.get("APPLIO_DATA_PATH")
     if env_path and os.path.exists(env_path):
-        with open("/tmp/applio_debug.txt", "a") as _df:
-            _df.write(f"=== _get_applio_logs_path (train.py): using env var: {env_path}\\n")
+        _applio_debug_note(f"=== _get_applio_logs_path (train.py): using env var: {env_path}")
         return env_path
 
     # === Try known data locations ===
@@ -88,14 +104,12 @@ def patch_train_py(base_path: str) -> bool:
 
     for path in known_paths:
         if os.path.exists(path):
-            with open("/tmp/applio_debug.txt", "a") as _df:
-                _df.write(f"=== _get_applio_logs_path (train.py): using known path: {path}\\n")
+            _applio_debug_note(f"=== _get_applio_logs_path (train.py): using known path: {path}")
             return path
 
     # === Last resort: use CWD ===
     cwd = os.getcwd()
-    with open("/tmp/applio_debug.txt", "a") as _df:
-        _df.write(f"=== _get_applio_logs_path (train.py): fallback to CWD: {cwd}\\n")
+    _applio_debug_note(f"=== _get_applio_logs_path (train.py): fallback to CWD: {cwd}")
     return cwd
 
 current_dir = _get_applio_logs_path()'''
