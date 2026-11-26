@@ -902,9 +902,13 @@ def pre_build_patch():
     We must patch source files before PyInstaller runs, then restore them
     afterward to keep the repo clean.
 
-    CRITICAL: Patch order matters! Some patches must run before others.
-    - patch_process_tracking.py MUST run before patch_subprocess_validation.py
-      (tracking transforms subprocess.run to Popen, validation expects run pattern)
+    CRITICAL: Patch order matters for some patches:
+    - patch_refinegan_legacy_discriminator.py MUST run before
+      patch_refinegan_legacy_train.py (the train patch uses the discriminator class)
+    - patch_process_tracking.py is listed before patch_subprocess_validation.py
+      (kept for readability; since the 2026-11-26 sync the two touch disjoint text)
+
+    After the patchers run, PATCH_MARKERS proves every required sub-patch landed.
     """
     print("\n" + "=" * 60)
     print("PRE-BUILD: Patching source files")

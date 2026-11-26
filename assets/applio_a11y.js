@@ -30,10 +30,15 @@
        [role=tablist]; the FIRST document-order match is a top-level tab
        (nested tab groups render inside tabitems, after the top tablist).
        tab-nav/tab-button match nothing. label-wrap, gradio-image,
-       gradio-container and [data-testid=toast-body] exist (bundle-grep). */
+       gradio-container and [data-testid=toast-body] exist (bundle-grep).
+     - since Applio 3.7 the pages are chosen from a sidebar of buttons
+       (#applio-navigation) and the page tabs stay hidden; the open page's
+       button carries aria-current="page" (assets/app_shell.py). */
   var ACCORDION_BLOCK = ".gr-accordion";
   var ACCORDION_BUTTON = "button.label-wrap";
   var TAB_SELECTED = '[role="tablist"] button[aria-selected="true"]';
+  var PAGE_SELECTED = '#applio-navigation button[aria-current="page"]';
+  var NAVIGATION = "#applio-navigation";
 
   function ensureRegions() {
     var root = document.querySelector(".gradio-container") || document.body;
@@ -193,10 +198,13 @@
     var t = ev.target;
     if (t && t.closest && t.closest(ACCORDION_BLOCK)) { scheduleHeal(); }
     if (t && t.closest && t.closest('[role="tablist"]')) { readNav(); }
+    // aria-current is set once the page has changed, so read it debounced.
+    if (t && t.closest && t.closest(NAVIGATION)) { scheduleHeal(); }
   }, true);
 
   function readNav() {
-    var sel = document.querySelector(TAB_SELECTED);
+    var sel = document.querySelector(PAGE_SELECTED) ||
+      document.querySelector(TAB_SELECTED);
     if (sel) {
       var token = (sel.textContent || "").trim();
       if (token && token !== lastNav) { lastNav = token; }

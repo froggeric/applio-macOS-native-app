@@ -144,8 +144,16 @@ def _get_version_info():
     """
     import json
 
-    for _rel in ("build_info.json", os.path.join("assets", "build_info.json")):
-        _candidate = os.path.join(BASE_PATH, _rel)
+    _candidates = [
+        os.path.join(BASE_PATH, "build_info.json"),
+        os.path.join(BASE_PATH, "assets", "build_info.json"),
+        # In a PyInstaller .app bundle the top-level files live in
+        # Contents/Resources and sys._MEIPASS (Contents/Frameworks) only links
+        # to them. A file added after the build, such as build_info.json,
+        # exists in Resources alone.
+        os.path.join(os.path.dirname(BASE_PATH), "Resources", "build_info.json"),
+    ]
+    for _candidate in _candidates:
         try:
             with open(_candidate, "r", encoding="utf-8") as f:
                 _info = json.load(f)
