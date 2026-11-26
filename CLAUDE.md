@@ -317,7 +317,7 @@ history browsing.
 - Use `requirements_macos.txt` (includes pywebview, pyinstaller, pyobjc)
 - PyTorch uses MPS (Metal Performance Shaders) on Apple Silicon
 - Install `setuptools<70` for pkg_resources support
-- First run downloads ~300MB models (600s timeout in wrapper)
+- First run downloads about 3 GB of models (600s timeout in wrapper)
 - User data: `~/Library/Application Support/Applio/` (cache), external path for models/training
 - Logs: `~/Library/Logs/Applio/`
 - Key environment variables in `macos_wrapper.py`:
@@ -344,13 +344,16 @@ history browsing.
   fork's own patches).
 - Preferences stored in NSUserDefaults (`com.iahispano.applio`)
 - Default location: `~/Applio/`
-- Build-time patcher (`patches/patch_data_paths.py`) redirects `core.py`'s `logs_path` to use `now_dir`
+- `logs_path` and the other data paths: upstream 3.7 resolves them itself from the exported
+  variables (`rvc/lib/user_config.py`); `patches/patch_data_paths.py` is retired
 - Menu: File → Set Data Location..., Open in Finder (various subfolders)
 
 **Subprocess Script Path Resolution:**
-- Script execution mode in `macos_wrapper.py` searches BASE_PATH as fallback
-- Required because scripts (in app bundle) won't exist in DATA_PATH (user data location)
-- Scripts found at `os.path.join(BASE_PATH, script_relative_path)` when not in cwd
+- Script execution mode lives in `applio_launcher.py` (the frozen entry): `Applio <script.py>`
+  is found by its absolute path, else under BASE_PATH, because the scripts do not exist in
+  DATA_PATH (user data location)
+- Relative script arguments are resolved against the data location first, then BASE_PATH
+- The script itself runs with the BUNDLE as working directory (see "Frozen working directory")
 
 **Subprocess Environment Variables:**
 - macOS uses "spawn" not "fork" - subprocesses DON'T inherit parent's env vars
@@ -366,10 +369,13 @@ history browsing.
 - MUST run `build_macos.py` from within `venv_macos` - running outside produces broken app
 - Outside venv: PyObjC not bundled → runtime error "AppHelper is not defined"
 - Outside venv: "Hidden import 'xxx' not found" warnings for torch, gradio, etc.
-- Setup: `/opt/homebrew/bin/brew install python@3.10` then `/opt/homebrew/bin/python3.10 -m venv venv_macos`
+- Setup: `./install_applio_mac.sh` (Python 3.12 through uv, or `--python /path/to/python3.12`;
+  creates `venv_macos`)
 
 **Debugging Frozen Apps:**
-- Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture
+- Use file-based logging (`/tmp/applio_debug.txt`) for code that runs before stdout capture.
+  `patches/patch_train_paths.py` writes it only when `APPLIO_DEBUG` is set, and a failed write
+  never stops training
 - **Silent exception handling:** In multiprocessing spawn mode, stdout is lost. Use file-based logging (e.g., `~/Library/Logs/Applio/extraction_errors.log`)
 - Check `DEBUGGING_HISTORY.md` for documented debugging sessions and solutions
 - After fixes, verify build timestamp is AFTER commit timestamp: `stat -f "%Sm" dist/Applio.app/Contents/MacOS/Applio`
@@ -381,18 +387,22 @@ history browsing.
 - **Local `rvc/models` must NOT be deleted.** The default `build_macos.py` is a *lite*
   build: `clean_bundled_models()` strips model weights from `dist/Applio.app` (the bundle
   only - shipped app stays ~1.6GB) and never touches the local filesystem. So keeping the
-  ~1.8G of models in gitignored `rvc/models/` does NOT bloat the shipped app, and `rm -rf
-  rvc/models/*` only forces a costly ~2G re-download. Leave local models in place; the
+  about 7 GB of models in gitignored `rvc/models/` does NOT bloat the shipped app, and `rm -rf
+  rvc/models/*` only forces a costly re-download (about 3 GB at first launch, custom pretrains
+  one by one). Leave local models in place; the
   bundle is re-stripped on every build. (A model-bundled build is `--models-installer`, a
   separate app - there is no CLI flag to bundle models into the main app; `--lite` is
   `store_true, default=True`, i.e. always on.)
 - **Corrupted `venv_macos` package:** if `import torch`/`pandas` fails with a partial-init /
   circular-import error, the installed wheel is corrupt → fix with
   `venv_macos/bin/python -m pip install --force-reinstall --no-deps <pkg>`.
-- **Frozen working directory is the data location.** `start_gui()` runs `os.chdir(DATA_PATH)`
-  before Gradio is imported, and the script dispatch (`Applio <script.py>`) changes to
-  `APPLIO_DATA_PATH` before `runpy`. So `now_dir = os.getcwd()` (core.py, the tabs,
-  `assets/i18n/i18n.py`) resolves INSIDE the data location. That is why the wrapper copies and
+- **Frozen working directory: the data location in the windowed app, the bundle in script
+  mode.** `start_gui()` runs `os.chdir(DATA_PATH)` before Gradio is imported, so there
+  `now_dir = os.getcwd()` (core.py, the tabs, `assets/i18n/i18n.py`) resolves INSIDE the data
+  location. The script dispatch (`Applio <script.py>`) does NOT change directory: the launcher
+  has chdir'ed to `sys._MEIPASS`, so the script runs with the bundle as working directory
+  (verified 2026-11-26) and a relative lookup inside a script (e.g. the embedder) finds the
+  bundle's copy. That is why the wrapper copies and
   refreshes translations, themes, tab scripts and sample-rate configs there. Code lives in the
   bundle: `sys._MEIPASS` is `Contents/Frameworks`, whose top-level entries are links into
   `Contents/Resources` (verified 2026-11-26). `build_info.json` is written to
@@ -418,17 +428,27 @@ history browsing.
   `rvc.lib.tools.applio_paths` are data only. If something must be importable that is not: inline
   it into fork-owned code or add it to HIDDEN_IMPORTS (a `from rvc... import ...` of a data-only
   module works in dev and fails frozen).
-- **Reproduce frozen-subprocess behavior without the GUI:** `dist/Applio.app/Contents/MacOS/Applio
-  /tmp/script.py args` - entry `applio_launcher.py` dispatches to the script (working directory =
-  the data location; pass an ABSOLUTE script path).
+- **Reproduce frozen-subprocess behavior without the GUI:** `<app>/Contents/MacOS/Applio
+  /absolute/script.py args` - entry `applio_launcher.py` dispatches to the script (working
+  directory = the bundle; pass ABSOLUTE paths for the script and its inputs).
 - **Testing the frozen app without touching the owner's data:**
-  - `APPLIO_DATA_PATH=<test folder>` pins the data location for one run. Seed it with a clone
-    of `rvc/models` (`cp -cR rvc/models <folder>/rvc/`). Drivers are in git-ignored
-    `.claude/port-tools/`: `applio_port_frozen_driver.py` (`Applio <script> <DATA> <phases>`;
-    env `SYNC_MODEL`, `SYNC_TOTAL_EPOCH`, `SYNC_LEGACY_PAIR`), `applio_sync_infer_driver.py`,
-    `applio_sync_gui_check.py`, `applio_sync_web_check.py`, `applio_sync_live_sample.py`.
-  - Every frozen start still rewrites `~/.applio/runtime_paths.json` AND
-    `~/Library/Application Support/Applio/runtime_paths.json`: back both up, restore after.
+  - Work on a copy: `cp -cR dist/Applio.app .claude/<test>/X.app` (same APFS volume, no extra
+    space). Never edit or launch `dist/Applio.app` itself: it is the build the owner tests.
+    After editing anything inside a copy, re-sign it ad hoc BEFORE the first launch (each Mach-O
+    file with `codesign --force --sign - --options runtime`, then the bundle with
+    `--entitlements`) and give it a throwaway bundle id. A still-signed, edited copy is blocked
+    with a "damaged and can't be opened" dialog on the owner's screen that only they can dismiss.
+  - `APPLIO_DATA_PATH=<test folder>` pins the data location for one run. Put that folder under
+    the git-ignored `.claude/` (on the SSD). Seed it with clones of the model groups the run
+    needs (`cp -cR rvc/models/<group> <folder>/rvc/models/`) and a dataset. Drivers are in
+    git-ignored `.claude/port-tools/`: `applio_port_frozen_driver.py`
+    (`Applio <script> <DATA> <phases>`; env `SYNC_MODEL`, `SYNC_TOTAL_EPOCH`,
+    `SYNC_LEGACY_PAIR`), `applio_sync_infer_driver.py`, `applio_sync_gui_check.py`,
+    `applio_sync_web_check.py`, `applio_sync_live_sample.py`.
+  - A windowed start (`open -n --env "APPLIO_DATA_PATH=…" <app>`) rewrites
+    `~/.applio/runtime_paths.json` AND `~/Library/Application Support/Applio/runtime_paths.json`:
+    back both up, restore after, and check they name the owner's data location again. A
+    script-mode start rewrites neither.
   - A script-mode driver must not import tab modules: translations are copied into the data
     location only by the GUI start.
   - Clean-quit test: start with `open -n --env "APPLIO_DATA_PATH=…" dist/Applio.app`, quit with
@@ -437,6 +457,10 @@ history browsing.
     is ignored by design.
   - A11y payload without VoiceOver: headless Chromium (playwright, temp venv) against the running
     app checks JS errors, `#applio-a11y-live`, polling and the 13 Browse buttons.
+  - A subagent cannot delete outside the repo (the permission system refuses): have it report
+    leftovers, and delete them from the main session with literal absolute paths (`rm -r "$VAR/x"`
+    is blocked by a built-in safety check). Never repeat a refused deletion; ask the owner.
+  - Remove the test folder when done (`/tmp/applio_debug.txt` too, if `APPLIO_DEBUG` was set).
 - `ps -E -p <pid>` (macOS) dumps a frozen process's env - check inherited `APPLIO_*`/`PATH`.
 
 **Build process gotchas:**
@@ -447,7 +471,7 @@ history browsing.
 - **`post_build_restore` reliably leaves `tabs/train/train.py` dirty** (3 patchers touch it: dataset_paths, train_44100, browse_buttons). After EVERY build run `git checkout -- assets core.py rvc tabs`; never commit it patched
 - PyInstaller cleans `dist/` at start - never delete while builds running
 - Before `rm -rf dist build`: no `Applio` process may run from `dist/` (it holds file handles, so `rm` fails with "Directory not empty"). Quit it (`osascript -e 'tell application "Applio" to quit'`) + `sleep 3` first
-- Build size: ~1.6GB lite (post-3.6.3 dependency stack; ~2GB models download on first launch)
+- Build size: ~1.6GB lite (post-3.6.3 dependency stack; about 3 GB of models download on first launch)
 - **Smoke = cert-free** `venv_macos/bin/python build_macos.py` (no flags; ad-hoc, runs locally) validates functionality; reserve `--sign --notarize --dmg` for the actual release
 - Signing requires handling broken symlinks (use `path.exists()` before `rglob`)
 - PyInstaller cache corruption: clear `~/Library/Application Support/pyinstaller/`
