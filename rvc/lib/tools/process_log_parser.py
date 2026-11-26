@@ -9,10 +9,20 @@ Used by:
 import re
 from typing import Optional, Dict, Any
 
+# A tqdm bar update, with or without a description prefix. The second form is
+# the training bar since Applio 3.7 (rvc/train/train.py); keep this identical
+# to ProgressWindowController._TQDM_LINE in applio_launcher.py.
+_TQDM_LINE = (
+    r"^\s*(?:.*[|:]\s*)?"  # optional description ending in "|" or ":"
+    r"(\d+)%\|[^|]*\|\s*"  # percentage and bar
+    r"(?:batch\s*=\s*)?"  # "{n}" or "batch={n}"
+    r"(\d+)/(\d+)\s*\[([^\]]+)\]"
+)
+
 
 def is_tqdm_line(line: str) -> bool:
     """Check if line is a tqdm progress bar update."""
-    return bool(re.match(r"^\s*\d+%\|.*\|\s*\d+/\d+\s*\[", line))
+    return bool(re.match(_TQDM_LINE, line))
 
 
 def parse_tqdm_line(line: str) -> Optional[Dict[str, Any]]:
@@ -21,9 +31,11 @@ def parse_tqdm_line(line: str) -> Optional[Dict[str, Any]]:
     Returns dict with: percent, current, total, eta, rate, rate_unit
     or None if parsing fails.
 
-    Pattern: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
+    Patterns:
+      "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
+      "epoch=3 | step=120 |  43%|████ | batch=21/49 [00:18<04:36,  1.16it/s]"
     """
-    match = re.match(r"^\s*(\d+)%\|.*\|\s*(\d+)/(\d+)\s*\[([^\]]+)\]", line)
+    match = re.match(_TQDM_LINE, line)
     if not match:
         return None
 

@@ -24,6 +24,7 @@ import os
 import sys
 import runpy
 import signal
+import copy
 import datetime
 import json
 import logging
@@ -829,6 +830,80 @@ import socketserver
 # =================================================================
 
 
+def _export_upstream_paths(data_path):
+    """Export the variables upstream 3.7+ reads itself (rvc/lib/user_config.py).
+
+    They are the logs folder, the settings file, the data root and the code
+    root. They replace the patch that used to redirect core.py's paths at build
+    time: nothing reads APPLIO_LOGS_PATH any more, and without APPLIO_LOGS_DIR
+    the logs folder defaults to inside the app bundle.
+    """
+    os.environ["APPLIO_LOGS_DIR"] = os.path.join(data_path, "logs")
+    os.environ["APPLIO_CONFIG_FILE"] = os.path.join(data_path, "assets", "config.json")
+    os.environ["APPLIO_ROOT"] = data_path
+    os.environ["APPLIO_CODE_ROOT"] = BASE_PATH
+
+
+def _files_differ(first, second):
+    """True when two files have different contents (size first, then bytes)."""
+    try:
+        if os.path.getsize(first) != os.path.getsize(second):
+            return True
+        with open(first, "rb") as a, open(second, "rb") as b:
+            while True:
+                block_a, block_b = a.read(1 << 20), b.read(1 << 20)
+                if block_a != block_b:
+                    return True
+                if not block_a:
+                    return False
+    except OSError:
+        return True
+
+
+def _add_missing_keys(defaults, target):
+    """Add the keys of `defaults` that `target` lacks (recursively for dicts).
+
+    Values already in `target` are never changed. Returns True if changed.
+    """
+    changed = False
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+            changed = True
+        elif isinstance(value, dict) and isinstance(target[key], dict):
+            changed = _add_missing_keys(value, target[key]) or changed
+    return changed
+
+
+def _add_missing_config_keys(template_path, user_path):
+    """Add to the user's config.json the settings keys the template has and it
+    lacks, in place. Returns True if the file was rewritten."""
+    import json
+
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = json.load(f)
+        with open(user_path, "r", encoding="utf-8") as f:
+            user = json.load(f)
+        if not isinstance(user, dict) or not isinstance(template, dict):
+            return False
+        changed = _add_missing_keys(template, user)
+        # "version" records which app wrote the file: keep it truthful.
+        if template.get("version") and user.get("version") != template.get("version"):
+            user["version"] = template["version"]
+            changed = True
+        if changed:
+            temp_path = user_path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(user, f, indent=2)
+            os.replace(temp_path, user_path)
+            logging.info(f"Added new default settings to {user_path}")
+        return changed
+    except (OSError, ValueError) as e:
+        logging.warning(f"Could not refresh the settings defaults: {e}")
+        return False
+
+
 def setup_bundled_resources():
     """Copy bundled static resources to user's data location.
 
@@ -837,93 +912,135 @@ def setup_bundled_resources():
     """
     import shutil
 
-    def copy_file(bundled_rel, dest_rel, desc):
-        """Copy a single file if destination doesn't exist."""
+    def copy_file(bundled_rel, dest_rel, desc, refresh=False):
+        """Copy one bundled file into the data location.
+
+        Without `refresh` it is copied only when missing. With `refresh` it is
+        copied whenever it differs from the bundled copy: for files the app
+        ships and the user never edits, so that an upgrade replaces the copy an
+        existing data location still holds (the app reads them from there,
+        relative to its working directory).
+        """
         bundled_path = os.path.join(BASE_PATH, bundled_rel)
         dest_path = os.path.join(DATA_PATH, dest_rel)
 
-        if os.path.exists(bundled_path):
-            dest_dir = os.path.dirname(dest_path)
-            os.makedirs(dest_dir, exist_ok=True)
-            if not os.path.exists(dest_path):
-                try:
-                    shutil.copy2(bundled_path, dest_path)
-                    logging.info(f"Copied {desc} to {dest_path}")
-                except Exception as e:
-                    logging.warning(f"Failed to copy {desc}: {e}")
-            else:
-                logging.debug(f"{desc} already exists at {dest_path}, skipping")
-        else:
+        if not os.path.exists(bundled_path):
             logging.debug(f"No bundled {desc} found at {bundled_path}")
+            return
+        if os.path.exists(dest_path) and not (
+            refresh and _files_differ(bundled_path, dest_path)
+        ):
+            logging.debug(f"{desc} already exists at {dest_path}, skipping")
+            return
+        try:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.copy2(bundled_path, dest_path)
+            logging.info(f"Copied {desc} to {dest_path}")
+        except Exception as e:
+            logging.warning(f"Failed to copy {desc}: {e}")
 
-    def copy_dir(bundled_rel, dest_rel, desc):
-        """Copy a directory if destination doesn't exist."""
+    def copy_dir(bundled_rel, dest_rel, desc, refresh=False):
+        """Copy a bundled directory into the data location, file by file."""
         bundled_path = os.path.join(BASE_PATH, bundled_rel)
-        dest_path = os.path.join(DATA_PATH, dest_rel)
-
-        if os.path.exists(bundled_path):
-            if not os.path.exists(dest_path):
-                try:
-                    shutil.copytree(bundled_path, dest_path)
-                    logging.info(f"Copied {desc} to {dest_path}")
-                except Exception as e:
-                    logging.warning(f"Failed to copy {desc}: {e}")
-            else:
-                logging.debug(f"{desc} already exists at {dest_path}, skipping")
-        else:
+        if not os.path.exists(bundled_path):
             logging.debug(f"No bundled {desc} found at {bundled_path}")
+            return
+        for base, dirs, names in os.walk(bundled_path):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in names:
+                if name.endswith((".pyc", ".pyo")):
+                    continue
+                relative = os.path.relpath(os.path.join(base, name), bundled_path)
+                copy_file(
+                    os.path.join(bundled_rel, relative),
+                    os.path.join(dest_rel, relative),
+                    desc,
+                    refresh,
+                )
 
-    # Copy individual files
+    # Files the app ships and the user never edits (last item True) are
+    # refreshed on every launch; the pretrains list is kept as found.
     files_to_copy = [
-        # Main app config (config.json is gitignored/generated; bundle ships the
-        # template, so copy it out as config.json for the running app)
-        ("assets/config_template.json", "assets/config.json", "App config"),
+        # Upstream 3.7+ creates the user's assets/config.json from this
+        # template and merges new defaults from it on every start.
+        (
+            "assets/config_template.json",
+            "assets/config_template.json",
+            "App config template",
+            True,
+        ),
         # TTS voices list
         (
             "rvc/lib/tools/tts_voices.json",
             "rvc/lib/tools/tts_voices.json",
             "TTS voices list",
+            True,
         ),
         # Config files for different sample rates
-        ("rvc/configs/48000.json", "rvc/configs/48000.json", "48kHz config"),
-        ("rvc/configs/44100.json", "rvc/configs/44100.json", "44.1kHz config"),
-        ("rvc/configs/40000.json", "rvc/configs/40000.json", "40kHz config"),
-        ("rvc/configs/32000.json", "rvc/configs/32000.json", "32kHz config"),
-        ("rvc/configs/24000.json", "rvc/configs/24000.json", "24kHz config"),
+        ("rvc/configs/48000.json", "rvc/configs/48000.json", "48kHz config", True),
+        ("rvc/configs/44100.json", "rvc/configs/44100.json", "44.1kHz config", True),
+        ("rvc/configs/40000.json", "rvc/configs/40000.json", "40kHz config", True),
+        ("rvc/configs/32000.json", "rvc/configs/32000.json", "32kHz config", True),
+        ("rvc/configs/24000.json", "rvc/configs/24000.json", "24kHz config", True),
         # Pretrains download list
         (
             "assets/pretrains.json",
             "rvc/models/pretraineds/custom/pretrains.json",
             "Pretrains list",
+            False,
         ),
         # JavaScript files for tabs
         (
             "tabs/report/recorder.js",
             "tabs/report/recorder.js",
             "Report tab recorder JS",
+            True,
         ),
-        ("tabs/report/main.js", "tabs/report/main.js", "Report tab main JS"),
+        ("tabs/report/main.js", "tabs/report/main.js", "Report tab main JS", True),
         (
             "tabs/report/record_button.js",
             "tabs/report/record_button.js",
             "Report tab button JS",
+            True,
         ),
-        ("tabs/realtime/main.js", "tabs/realtime/main.js", "Realtime tab main JS"),
+        (
+            "tabs/realtime/main.js",
+            "tabs/realtime/main.js",
+            "Realtime tab main JS",
+            True,
+        ),
     ]
 
-    for bundled_rel, dest_rel, desc in files_to_copy:
-        copy_file(bundled_rel, dest_rel, desc)
+    for bundled_rel, dest_rel, desc, refresh in files_to_copy:
+        copy_file(bundled_rel, dest_rel, desc, refresh)
 
-    # Copy directories (only if destination doesn't exist)
+    # The user's settings file is created from the template once and then
+    # kept. Add the settings keys a newer template has and the file lacks:
+    # upstream's own loader merges them, but some tabs read the file directly.
+    copy_file("assets/config_template.json", "assets/config.json", "App config")
+    _add_missing_config_keys(
+        os.path.join(BASE_PATH, "assets", "config_template.json"),
+        os.path.join(DATA_PATH, "assets", "config.json"),
+    )
+
+    # Translations and themes are refreshed like the files above (the language
+    # files changed a lot between 3.6 and 3.7, and the app reads them from the
+    # data location). Preset folders are the user's: files are added, never
+    # replaced or removed.
     dirs_to_copy = [
-        ("assets/i18n", "assets/i18n", "Internationalization files"),
-        ("assets/themes", "assets/themes", "Gradio themes"),
-        ("assets/presets", "assets/presets", "Effect presets"),
-        ("assets/formant_shift", "assets/formant_shift", "Formant shift presets"),
+        ("assets/i18n", "assets/i18n", "Internationalization files", True),
+        ("assets/themes", "assets/themes", "Gradio themes", True),
+        ("assets/presets", "assets/presets", "Effect presets", False),
+        (
+            "assets/formant_shift",
+            "assets/formant_shift",
+            "Formant shift presets",
+            False,
+        ),
     ]
 
-    for bundled_rel, dest_rel, desc in dirs_to_copy:
-        copy_dir(bundled_rel, dest_rel, desc)
+    for bundled_rel, dest_rel, desc, refresh in dirs_to_copy:
+        copy_dir(bundled_rel, dest_rel, desc, refresh)
 
 
 # setup_bundled_resources() is called from start_gui() after os.chdir(DATA_PATH).
@@ -1728,10 +1845,17 @@ def start_gui(launcher=None):
     # Frozen early data-path setup (moved from the early-prefs block): makes
     # APPLIO_LOGS_PATH / APPLIO_DATA_PATH available to subprocess scripts that
     # run via the dispatch below BEFORE the GUI data-path resolution.
+    # APPLIO_DATA_PATH set before launch pins the data location for this run
+    # (testing, or a second installation next to the normal one). The saved
+    # preference is then neither read nor written.
+    _env_data_path = os.environ.get("APPLIO_DATA_PATH")
+
     if getattr(sys, "frozen", False):
         _early_prefs = PreferencesManager()
-        _early_data_path = _early_prefs.get_data_path() or os.path.expanduser(
-            "~/Applio"
+        _early_data_path = (
+            _env_data_path
+            or _early_prefs.get_data_path()
+            or os.path.expanduser("~/Applio")
         )
         # Debug logging only when APPLIO_DEBUG env var is set
         if os.environ.get("APPLIO_DEBUG"):
@@ -1749,6 +1873,7 @@ def start_gui(launcher=None):
         os.environ["APPLIO_AUDIOS_PATH"] = os.path.join(
             _early_data_path, "assets", "audios"
         )
+        _export_upstream_paths(_early_data_path)
 
         # Write config in frozen mode (ensures it's available for all subprocesses).
         _write_runtime_config()
@@ -1893,7 +2018,14 @@ def start_gui(launcher=None):
     #    module-level GUI block). First-run picker runs here, NOT at import.
     global DATA_PATH
     _prefs = PreferencesManager()
-    DATA_PATH = _prefs.get_data_path()
+    if _env_data_path:
+        # Selected by the caller through the environment (see above): skip the
+        # first-run prompt and leave the saved preference alone.
+        DATA_PATH = os.path.abspath(_env_data_path)
+        os.makedirs(DATA_PATH, exist_ok=True)
+        logging.info(f"Data location set by APPLIO_DATA_PATH: {DATA_PATH}")
+    else:
+        DATA_PATH = _prefs.get_data_path()
 
     if not DATA_PATH:
         import applio_i18n
@@ -1989,6 +2121,7 @@ def start_gui(launcher=None):
     # so it is intentionally NOT exported here; its unconditional resolved-path export is a
     # Task 2 / §6.12 change for single-process training subs.)
     os.environ["APPLIO_LOGS_PATH"] = os.path.join(DATA_PATH, "logs")
+    _export_upstream_paths(DATA_PATH)
 
     # Copy bundled static resources to the data location (was called at module
     # scope after import webview; CWD-independent, so safe before it).

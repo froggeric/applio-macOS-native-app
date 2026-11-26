@@ -2107,10 +2107,21 @@ class ProgressWindowController:
                 except queue.Full:
                     pass  # Skip progress update if queue is full
 
+    # A tqdm bar update, with or without a description prefix:
+    #   "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
+    #   "epoch=3 | step=120 |  43%|████ | batch=21/49 [00:18<04:36,  1.16it/s]"
+    #   "Extracting:  43%|████ | 21/49 [00:18<04:36,  1.16it/s]"  (tqdm default with a desc)
+    # The second form is the training bar since upstream 3.7 (rvc/train/train.py).
+    _TQDM_LINE = (
+        r"^\s*(?:.*[|:]\s*)?"  # optional description ending in "|" or ":"
+        r"(\d+)%\|[^|]*\|\s*"  # percentage and bar
+        r"(?:batch\s*=\s*)?"  # "{n}" or "batch={n}"
+        r"(\d+)/(\d+)\s*\[([^\]]+)\]"
+    )
+
     def _is_tqdm_line(self, line):
         """Check if line is a tqdm progress bar update."""
-        # Match patterns like: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
-        return bool(re.match(r"^\s*\d+%\|.*\|\s*\d+/\d+\s*\[", line))
+        return bool(re.match(self._TQDM_LINE, line))
 
     def _parse_tqdm_line(self, line):
         """Extract progress info from tqdm line.
@@ -2118,8 +2129,7 @@ class ProgressWindowController:
         Returns dict with: percent, current, total, eta, rate, rate_unit
         or None if parsing fails.
         """
-        # Pattern: "  5%|▍         | 16/333 [00:18<04:36,  1.16it/s]"
-        match = re.match(r"^\s*(\d+)%\|.*\|\s*(\d+)/(\d+)\s*\[([^\]]+)\]", line)
+        match = re.match(self._TQDM_LINE, line)
         if not match:
             return None
 
@@ -6496,11 +6506,13 @@ class ApplioLauncher:
                 new_path = urls[0].path()
                 logging.info(f"[Launcher] User selected new data location: {new_path}")
 
-                # Save preference via NSUserDefaults
+                # Save preference via NSUserDefaults. The key is the one
+                # macos_wrapper.py's PreferencesManager reads (KEY_DATA_PATH);
+                # it was saved under "dataPath" before, which nothing read.
                 from Foundation import NSUserDefaults
 
                 defaults = NSUserDefaults.standardUserDefaults()
-                defaults.setObject_forKey_(new_path, "dataPath")
+                defaults.setObject_forKey_(new_path, "userDataPath")
 
                 # Notify user they need to restart
                 from AppKit import NSAlert, NSAlertStyleWarning
