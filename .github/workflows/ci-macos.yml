@@ -52,22 +52,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Cache venv_macos
         uses: actions/cache@v4
         with:
           path: venv_macos
-          key: venvmacos-${{ runner.os }}-py310-${{ hashFiles('requirements_macos.txt') }}
-          restore-keys: venvmacos-${{ runner.os }}-py310-
+          key: venvmacos-${{ runner.os }}-py312-${{ hashFiles('requirements_macos.txt') }}
+          restore-keys: venvmacos-${{ runner.os }}-py312-
 
       - name: Create venv + install dependencies
         run: |
           if [ ! -x venv_macos/bin/python ]; then
-            python3.10 -m venv venv_macos
+            python3.12 -m venv venv_macos
           fi
           venv_macos/bin/pip install --upgrade pip wheel
           venv_macos/bin/pip install -r requirements_macos.txt
