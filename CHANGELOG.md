@@ -74,6 +74,9 @@ build now runs on Python 3.12.
 - **Notarization falls back to the stored app-specific password** when a Mac has no
   notarytool profile `applio-notarize` but still holds the keychain item the fork used before
   3.6.3.5. The build prints a line when it does. The profile is used whenever it exists.
+- **The macOS CI and release workflows run on `macos-15`.** GitHub retired the macOS 14
+  runner image on 2026-11-02; the first push after this sync cancelled at once with
+  "The configuration 'macos-14-arm64-us-default' is not supported".
 - 115/115 tests across the 14 suites. The frozen app was checked against a separate data
   folder (preprocessing, extraction on Metal, training with pause and resume, a resumed
   training that keeps its earlier epochs, RefineGAN-Legacy training and conversion, batch

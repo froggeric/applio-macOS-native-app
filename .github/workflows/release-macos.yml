@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     environment: signing
     timeout-minutes: 90
     steps:

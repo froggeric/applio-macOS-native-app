@@ -481,6 +481,10 @@ history browsing.
 - **Cert-free gates for signing changes:** a plain `build_macos.py` run (no `--sign`) is safe (`--help`/`py_compile`
   exit before the module-level build) and verifies `CFBundleVersion` in the built Info.plist + git-cleanliness
   without the cert; unit-test Mach-O detection by copying the fn to a temp script (`import build_macos` runs the build).
+- **macOS runner label is `macos-15` (since 2026-11-26):** GitHub retired the `macos-14` image
+  on 2026-11-02; a workflow still on it is cancelled at once with "The configuration
+  'macos-14-arm64-us-default' is not supported". `gh` defaults to the UPSTREAM repo here: pass
+  `-R froggeric/applio-macOS-native-app` to every `gh run` / `gh release` / `gh pr` command.
 - **GHA macOS runners have no `rg`:** use `grep -E`/`grep -Eq` in workflow steps (a `rg -q` in
   `ci-macos.yml` once failed the run with "command not found"; locally `rg` exists, so this is CI-only).
 - **Monitoring a CI run:** `gh run watch <id> -R froggeric/applio-macOS-native-app --exit-status`
