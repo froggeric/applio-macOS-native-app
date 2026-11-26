@@ -1,47 +1,46 @@
 """
-Patch to add RefineGAN-Legacy architecture detection in train.py.
+Patch to add RefineGAN-Legacy architecture detection in train.py (upstream 3.7.2).
 
-This patch adds:
+This patch adds, both required:
 1. A helper function `_detect_refinegan_legacy()` to detect legacy pretrained models
-2. Logic to re-instantiate net_g with RefineGAN-Legacy vocoder when legacy pretrained is detected
-3. Logic to re-instantiate net_d with DiscriminatorRLegacy when legacy pretrained is detected
+   (module level, right after the RefineGAN vocoder config)
+2. Logic inside run(), right after the `try:` that opens the pretrain-G block, that
+   re-instantiates net_g with the RefineGAN-Legacy generator, net_d with
+   DiscriminatorRLegacy and both optimizers when a legacy pretrained is detected
 
 The legacy architecture (original RVC-Boss) differs from current Applio RefineGAN:
 - Generator: source_conv vs pre_conv, l_linear vs merge.0
 - Discriminator: (5,1) kernels vs (3,9), channel expansion vs constant channels
 and requires loading with compatible implementations.
+
+Both edits are pure insertions, so everything upstream has around them is left
+byte for byte, including the "Overriding the pretrain speaker embedding size" print
+and the two `ckpt["emb_g.weight"] = ...` overrides.
+
+Exit codes:
+  0  applied, or already applied and verified
+  2  a required anchor was not found, or verification failed (nothing is written)
+
+Needs patches/patch_refinegan_legacy_discriminator.py (DiscriminatorRLegacy) and
+patches/patch_refinegan_legacy.py (the "RefineGAN-Legacy" vocoder) as well.
 """
 
-import os
+import argparse
+import sys
+from pathlib import Path
+
+EXIT_OK = 0
+EXIT_FAILED = 2
 
 _IDEMPOTENCY_MARKER = "# RefineGAN-Legacy detection added"
 
-
-def patch_train(base_path: str) -> bool:
-    """Patch train.py to add RefineGAN-Legacy architecture detection.
-
-    Args:
-        base_path: Directory containing train.py (e.g., rvc/train/)
-
-    Returns:
-        True if patched successfully,    Raises FileNotFoundError if file not found
-    """
-    train_path = os.path.join(base_path, "train.py")
-
-    if not os.path.exists(train_path):
-        raise FileNotFoundError(f"train.py not found at {train_path}")
-
-    with open(train_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    if _IDEMPOTENCY_MARKER in content:
-        print("  [RefineGAN-Legacy train.py] Already patched, skipping.")
-        return True
-
-    print("  [RefineGAN-Legacy train.py] Patching...")
-
-    # Add the detection function after the RefineGAN vocoder config
-    detection_func = '''
+HELPER_MARKER = "def _detect_refinegan_legacy(pretrain_path: str) -> bool:"
+HELPER_ANCHOR = (
+    'if vocoder == "RefineGAN":\n'
+    '    disc_version = "v3"\n'
+    "    multiscale_mel_loss = True\n"
+)
+HELPER_FUNC = '''
 
 def _detect_refinegan_legacy(pretrain_path: str) -> bool:
     """Detect if pretrained model uses legacy RefineGAN architecture.
@@ -72,45 +71,22 @@ def _detect_refinegan_legacy(pretrain_path: str) -> bool:
         return False
 '''
 
-    # Insert detection function after the RefineGAN vocoder config block
-    refinegan_config_end = 'if vocoder == "RefineGAN":\n    disc_version = "v3"\n    multiscale_mel_loss = True'
-    if refinegan_config_end in content:
-        content = content.replace(
-            refinegan_config_end,
-            refinegan_config_end + detection_func,
-        )
-
-    # Now patch the pretrained G loading section to detect and handle legacy architecture
-    # Find the pretrained G loading block and modify it
-    old_pretrain_g_block = """        if pretrainG not in ("", "None"):
-            if rank == 0:
-                print(f"Loaded pretrained (G) '{pretrainG}'")
-            try:
-                ckpt = torch.load(pretrainG, map_location="cpu", weights_only=True)[
-                    "model"
-                ]
-                if hasattr(net_g, "module"):
-                    net_g.module.load_state_dict(ckpt)
-                else:
-                    net_g.load_state_dict(ckpt)
-                del ckpt
-            except Exception as e:
-                print(
-                    "The parameters of the pretrain model such as the sample rate or architecture do not match the selected model."
-                )
-                print(e)
-                sys.exit(1)"""
-
-    new_pretrain_g_block = """        if pretrainG not in ("", "None"):
-            if rank == 0:
-                print(f"Loaded pretrained (G) '{pretrainG}'")
-            try:
-                # Detect legacy RefineGAN architecture
+DETECT_MARKER = "is_legacy = _detect_refinegan_legacy(pretrainG)"
+DETECT_ANCHOR = (
+    '        if pretrainG not in ("", "None"):\n'
+    "            if rank == 0:\n"
+    "                print(f\"Loaded pretrained (G) '{pretrainG}'\")\n"
+    "            try:\n"
+)
+# Inserted straight after the anchor (inside the try:). DDP and dist are the
+# module-level names train.py already uses; binding them here would shadow them
+# for the whole of run().
+DETECT_BLOCK = """                # Detect legacy RefineGAN architecture
                 is_legacy = _detect_refinegan_legacy(pretrainG)
                 if is_legacy and vocoder == "RefineGAN":
                     if rank == 0:
                         print("Detected legacy RefineGAN architecture, using RefineGAN-Legacy vocoder")
-                    # Re-instantiate net_g with legacy vocoder
+                    # Re-instantiate net_g with the legacy generator
                     net_g = Synthesizer(
                         config.data.filter_length // 2 + 1,
                         config.train.segment_size // config.data.hop_length,
@@ -121,13 +97,12 @@ def _detect_refinegan_legacy(pretrain_path: str) -> bool:
                         checkpointing=checkpointing,
                         randomized=randomized,
                     )
-                    if torch.cuda.is_available():
-                        net_g = net_g.cuda(device_id)
-                    else:
-                        net_g = net_g.to(device)
+                    # Also re-instantiate net_d with the legacy discriminator
+                    from rvc.lib.algorithm.discriminators import (
+                        DiscriminatorRLegacy,
+                        MultiPeriodDiscriminator,
+                    )
 
-                    # Also re-instantiate net_d with legacy discriminator
-                    from rvc.lib.algorithm.discriminators import MultiPeriodDiscriminator, DiscriminatorRLegacy
                     net_d = MultiPeriodDiscriminator(
                         config.model.use_spectral_norm,
                         checkpointing=checkpointing,
@@ -135,20 +110,21 @@ def _detect_refinegan_legacy(pretrain_path: str) -> bool:
                         disc_r_class=DiscriminatorRLegacy,
                     )
                     if torch.cuda.is_available():
+                        net_g = net_g.cuda(device_id)
                         net_d = net_d.cuda(device_id)
                     else:
+                        net_g = net_g.to(device)
                         net_d = net_d.to(device)
 
-                    # Re-wrap with DDP if needed
-                    if n_gpus > 1 and device.type == "cuda":
-                        from torch.nn.parallel import DistributedDataParallel as DDP
+                    # Re-wrap with DDP, same condition as the initial wrap
+                    if n_gpus > 1 and device.type == "cuda" and dist.is_initialized():
                         net_g = DDP(net_g, device_ids=[device_id])
                         net_d = DDP(net_d, device_ids=[device_id])
 
-                    # Re-create optimizers for new model parameters
+                    # Re-create optimizers for the new model parameters
                     optim_g = optimizer(
                         net_g.parameters(),
-                        config.train.learning_rate,
+                        config.train.learning_rate * g_lr_coeff,
                         betas=config.train.betas,
                         eps=config.train.eps,
                     )
@@ -158,41 +134,153 @@ def _detect_refinegan_legacy(pretrain_path: str) -> bool:
                         betas=config.train.betas,
                         eps=config.train.eps,
                     )
+"""
 
-                ckpt = torch.load(pretrainG, map_location="cpu", weights_only=True)[
-                    "model"
-                ]
-                if hasattr(net_g, "module"):
-                    net_g.module.load_state_dict(ckpt)
-                else:
-                    net_g.load_state_dict(ckpt)
-                del ckpt
-            except Exception as e:
-                print(
-                    "The parameters of the pretrain model such as the sample rate or architecture do not match the selected model."
-                )
-                print(e)
-                sys.exit(1)"""
+MARKERS = (
+    ("helper _detect_refinegan_legacy()", HELPER_MARKER),
+    ("pretrain-G legacy rewrite in run()", DETECT_MARKER),
+)
+# Upstream lines that follow the inserted block; they must survive untouched.
+UPSTREAM_KEEP = (
+    'f"Overriding the pretrain speaker embedding size to {spk_dim} speakers."',
+    'ckpt["emb_g.weight"] = net_g.module.emb_g.weight.detach().clone()',
+    'ckpt["emb_g.weight"] = net_g.emb_g.weight.detach().clone()',
+    "                net_g.load_state_dict(ckpt)",
+)
 
-    if old_pretrain_g_block in content:
-        content = content.replace(old_pretrain_g_block, new_pretrain_g_block)
 
-    # Add idempotency marker at the end
-    content = content.rstrip() + "\n" + _IDEMPOTENCY_MARKER + "\n"
+class PatchError(Exception):
+    """A required anchor was not found, or did not behave as expected."""
 
-    with open(train_path, "w", encoding="utf-8") as f:
-        f.write(content)
 
-    print("  [RefineGAN-Legacy train.py] Patched successfully")
-    return True
+def patch_content(content):
+    """Return (patched content, [(status, sub-patch name), ...])."""
+    notes = []
+
+    if HELPER_MARKER in content:
+        notes.append(("already", "helper _detect_refinegan_legacy()"))
+    elif content.count(HELPER_ANCHOR) == 1:
+        content = content.replace(HELPER_ANCHOR, HELPER_ANCHOR + HELPER_FUNC)
+        notes.append(("applied", "helper _detect_refinegan_legacy()"))
+    else:
+        raise PatchError("helper: anchor not found: %r" % HELPER_ANCHOR)
+
+    if DETECT_MARKER in content:
+        notes.append(("already", "pretrain-G legacy rewrite in run()"))
+    elif content.count(DETECT_ANCHOR) == 1:
+        content = content.replace(DETECT_ANCHOR, DETECT_ANCHOR + DETECT_BLOCK)
+        notes.append(("applied", "pretrain-G legacy rewrite in run()"))
+    else:
+        raise PatchError("pretrain-G rewrite: anchor not found: %r" % DETECT_ANCHOR)
+
+    if _IDEMPOTENCY_MARKER in content:
+        notes.append(("already", "idempotency marker"))
+    else:
+        if not content.endswith("\n"):
+            content += "\n"
+        content += _IDEMPOTENCY_MARKER + "\n"
+        notes.append(("applied", "idempotency marker"))
+    return content, notes
+
+
+def verify(original, content):
+    """Return a list of problems; empty means every sub-patch has landed."""
+    problems = []
+    for name, marker in MARKERS:
+        found = content.count(marker)
+        if found != 1:
+            problems.append("%s: expected 1 x %r, found %d" % (name, marker, found))
+    if content.count(_IDEMPOTENCY_MARKER) != 1:
+        problems.append(
+            "idempotency marker: expected exactly 1 x %r" % _IDEMPOTENCY_MARKER
+        )
+    for line in UPSTREAM_KEEP:
+        if content.count(line) != original.count(line):
+            problems.append("upstream line changed: %r" % line)
+    return problems
+
+
+def syntax_problem(path, content):
+    """Return a message when the content is not valid Python, else None."""
+    try:
+        compile(content, str(path), "exec")
+    except SyntaxError as error:
+        return "%s: does not compile: %s" % (path, error)
+    return None
+
+
+def _read(path):
+    # newline="" keeps the file's own line endings, byte for byte.
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def patch_train(base_path, dry_run=False):
+    """Patch train.py; returns the process exit code."""
+    train_path = Path(base_path) / "train.py"
+    tag = "[RefineGAN-Legacy train.py]"
+
+    def fail(message):
+        print("  %s [FAIL] %s" % (tag, message))
+        print("  %s RESULT: FAILED (exit 2), nothing written" % tag)
+        return EXIT_FAILED
+
+    if not train_path.is_file():
+        return fail("file not found: %s" % train_path)
+
+    print("%s Patching: %s" % (tag, train_path))
+    print("%s Mode: %s" % (tag, "dry-run" if dry_run else "apply"))
+    original = _read(train_path)
+    try:
+        content, notes = patch_content(original)
+    except PatchError as error:
+        return fail(error)
+    for status, name in notes:
+        print("  %s [%s] %s" % (tag, status, name))
+
+    problems = verify(original, content)
+    problem = syntax_problem(train_path, content)
+    if problem:
+        problems.append(problem)
+    if problems:
+        return fail("; ".join(problems))
+
+    changed = content != original
+    if dry_run:
+        print(
+            "  %s RESULT: DRY-RUN OK, nothing written (%s)"
+            % (tag, "1 file would change" if changed else "already applied")
+        )
+        return EXIT_OK
+    if changed:
+        with open(train_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        print("  [RefineGAN-Legacy train.py] wrote %s" % train_path)
+    print(
+        "  [RefineGAN-Legacy train.py] RESULT: %s"
+        % ("APPLIED" if changed else "ALREADY APPLIED")
+    )
+    return EXIT_OK
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Add RefineGAN-Legacy architecture detection to rvc/train/train.py"
+    )
+    parser.add_argument(
+        "base_path",
+        nargs="?",
+        default="rvc/train",
+        help="Directory holding train.py",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing anything",
+    )
+    args = parser.parse_args()
+    return patch_train(args.base_path, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python patch_refinegan_legacy_train.py <base_path>")
-        sys.exit(1)
-    base_path = sys.argv[1]
-    success = patch_train(base_path)
-    sys.exit(0 if success else 2)
+    sys.exit(main())

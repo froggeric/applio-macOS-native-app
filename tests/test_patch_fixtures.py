@@ -6,6 +6,8 @@ import importlib.util
 import os
 import py_compile
 import re
+import subprocess
+import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,36 +20,36 @@ def _load(name, relpath):
     return mod
 
 
-def _patched_core(tracking):
+TRACKED_KINDS = ("preprocess", "extract", "training", "tts")
+
+
+def _patched_core(tracking, tmp_dir):
+    """Run the tracking patcher on a copy of pristine core.py; return the result."""
     src = open(os.path.join(REPO, "core.py"), encoding="utf8").read()
     assert (
         "_APPLIO_" not in src and "_track_process(" not in src
     ), "core.py is dirty (patched?) - restore first"
-    content = src
-    ok = 0
-    for fn_name in (
-        "patch_run_preprocess_script",
-        "patch_run_extract_script",
-        "patch_run_train_script",
-        "patch_run_index_script",
-        "patch_voice_conversion",
-    ):
-        fn = getattr(tracking, fn_name)
-        content, patched = fn(content)
-        ok += 1 if patched else 0
-    assert ok >= 4, f"expected >=4 patched blocks, got {ok} (anchors drifted?)"
-    return content
+    with open(os.path.join(tmp_dir, "core.py"), "w", encoding="utf8") as fh:
+        fh.write(src)
+    assert tracking.patch_core_py(tmp_dir) == 0, "patcher failed (anchors drifted?)"
+    with open(os.path.join(tmp_dir, "core.py"), encoding="utf8") as fh:
+        return fh.read()
 
 
-def test_history_written_before_untrack():
+def test_history_written_before_untrack(tmp_path):
     tracking = _load("patch_process_tracking", "patches/patch_process_tracking.py")
-    patched = _patched_core(tracking)
+    patched = _patched_core(tracking, str(tmp_path))
+    # Every tracked launch goes through the one tracked-run helper; the index
+    # step stays on upstream's run_quiet().
+    for kind in TRACKED_KINDS:
+        assert patched.count(f'_applio_tracked_run("{kind}",') == 1, kind
+    assert patched.count("result = run_quiet(command)") == 1  # run_index_script
     # Anchored regex = CALL sites only: a def line ("    def _untrack_process(")
     # cannot match ^[ \t]*_untrack_process\(. (A plain find() would also hit
     # the injected helper definitions — that false-positive pattern is why
     # this uses the anchor.)
     sites = list(re.finditer(r"(?m)^[ \t]*_untrack_process\(", patched))
-    assert len(sites) >= 4, f"expected >=4 untrack call sites, found {len(sites)}"
+    assert len(sites) == 1, f"expected 1 untrack call site, found {len(sites)}"
     for m in sites:
         u = m.start()
         # enclosing function = nearest preceding top-level def
@@ -63,6 +65,107 @@ def test_history_written_before_untrack():
         tf.write(patched)
     py_compile.compile(tf.name, doraise=True)
     os.unlink(tf.name)
+
+
+def _tracked_helpers(patched, tmp_path):
+    """Execute the injected helper block with the state writers replaced by a log."""
+    start = patched.index("# === Process Tracking (injected by patch) ===")
+    end = patched.index("# === End Process Tracking ===")
+    events = []
+    ns = {"os": os, "subprocess": subprocess, "logs_path": str(tmp_path / "logs")}
+    exec(patched[start:end], ns)
+    ns["_track_process"] = lambda kind, pid, **meta: events.append(
+        ("track", kind, meta)
+    )
+    ns["_add_to_history"] = lambda entry: events.append(("history", entry))
+    ns["_untrack_process"] = lambda kind: events.append(("untrack", kind))
+    return ns["_applio_tracked_run"], events
+
+
+def _child(code):
+    return [sys.executable, "-c", code]
+
+
+def test_tracked_run_reports_in_order_and_keeps_worker_output(tmp_path, monkeypatch):
+    tracking = _load("patch_process_tracking", "patches/patch_process_tracking.py")
+    patched = _patched_core(tracking, str(tmp_path))
+    run, events = _tracked_helpers(patched, tmp_path)
+    session_log = tmp_path / "session.log"
+    monkeypatch.setenv("APPLIO_TERMINAL_LOG", str(session_log))
+    child = _child(
+        "import os, sys; print(os.environ.get('APPLIO_TERMINAL_LOG', 'unset')); "
+        "sys.exit(3)"
+    )
+
+    result = run("preprocess", child, "mymodel", "preprocess.log")
+
+    assert (result.returncode, result.args) == (3, child)
+    # The terminal word is in the history before the job leaves the active list.
+    assert [e[0] for e in events] == ["track", "history", "untrack"]
+    tracked = events[0][2]
+    assert (tracked["model_name"], tracked["log_file"]) == (
+        "mymodel",
+        str(tmp_path / "logs" / "mymodel" / "preprocess.log"),
+    )
+    assert events[1][1]["type"] == "preprocess"
+    assert events[1][1]["status"] == "failed"
+    # The worker never saw the session-log variable: its output went to the
+    # per-process log, which is forwarded to the session log.
+    with open(tracked["log_file"], encoding="utf8") as fh:
+        assert fh.read().strip() == "unset"
+    with open(session_log, encoding="utf8") as fh:
+        assert fh.read().strip() == "unset"
+
+
+def test_tracked_run_training_history_merges_a_resumed_curve(tmp_path, monkeypatch):
+    tracking = _load("patch_process_tracking", "patches/patch_process_tracking.py")
+    patched = _patched_core(tracking, str(tmp_path))
+    run, events = _tracked_helpers(patched, tmp_path)
+    monkeypatch.delenv("APPLIO_TERMINAL_LOG", raising=False)
+    log_file = tmp_path / "logs" / "mymodel" / "training.log"
+    log_file.parent.mkdir(parents=True)
+
+    def eval_line(epoch, loss, best):
+        return (
+            f"mymodel | epoch={epoch} | time=00:00:01 | lowest_value={loss} "
+            f"(epoch {best} and step {epoch})\n"
+        )
+
+    # Epochs 2-5 were trained earlier; this run picks up at epoch 6.
+    with open(log_file, "w", encoding="utf8") as fh:
+        fh.write(eval_line(2, 30.5, 2) + eval_line(5, 20.25, 5))
+    run(
+        "training",
+        _child("print(%r, end='')" % eval_line(7, 10.125, 7)),
+        "mymodel",
+        "training.log",
+        total_epoch=20,
+    )
+
+    kinds = [e[0] for e in events]
+    assert kinds == ["track", "history", "untrack"]
+    assert events[0][2]["total_epoch"] == 20
+    entry = events[1][1]
+    assert entry["status"] == "completed"
+    assert (entry["best_epoch"], entry["best_loss"], entry["final_epoch"]) == (
+        7,
+        10.125,
+        7,
+    )
+    assert entry["epoch_points"] == [[2, 30.5], [5, 20.25], [7, 10.125]]
+    assert (entry["total_epoch"], entry["log_path"]) == (20, str(log_file))
+
+    # A fresh retrain of the same model starts over at epoch 2: the old curve
+    # must not be dragged in.
+    del events[:]
+    run(
+        "training",
+        _child("print(%r, end='')" % (eval_line(2, 33.0, 2) + eval_line(3, 29.0, 3))),
+        "mymodel",
+        "training.log",
+        total_epoch=20,
+    )
+    assert events[1][1]["epoch_points"] == [[2, 33.0], [3, 29.0]]
 
 
 def test_upload_scan_bounded_to_function_body():
@@ -225,7 +328,8 @@ def test_web_payload_patch():
     launch_idx = patched.index("def launch_gradio(")
     call_idx = patched.index('"js": _applio_a11y_js(client_mode),')
     assert helper_idx < launch_idx < call_idx
-    assert '"css": "footer{display:none !important}",' in patched
+    # upstream 3.7 builds its stylesheet in the app_css variable
+    assert patched.count('"css": app_css,') == src.count('"css": app_css,') == 2
     repatched, status2 = payload.patch_app(patched)
     assert status2 == "already" and repatched == patched  # idempotent
     with tempfile.NamedTemporaryFile(
@@ -239,12 +343,26 @@ def test_web_payload_patch():
 
 
 def run_all():
-    test_history_written_before_untrack()
+    """Standalone runner: same tests as pytest, with the two fixtures faked."""
+    import tempfile
+    from pathlib import Path
+
+    class _Env:
+        def setenv(self, name, value):
+            os.environ[name] = value
+
+        def delenv(self, name, raising=True):
+            os.environ.pop(name, None)
+
+    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        test_history_written_before_untrack(Path(first))
+        test_tracked_run_reports_in_order_and_keeps_worker_output(Path(first), _Env())
+        test_tracked_run_training_history_merges_a_resumed_curve(Path(second), _Env())
     test_upload_scan_bounded_to_function_body()
     test_progress_routes_patch()
     test_browse_buttons_patch()
     test_web_payload_patch()
-    print("All patch fixture tests passed (5).")
+    print("All patch fixture tests passed (8).")
 
 
 if __name__ == "__main__":

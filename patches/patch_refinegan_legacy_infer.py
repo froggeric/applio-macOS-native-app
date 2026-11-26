@@ -1,44 +1,38 @@
 """
-Patch to add RefineGAN-Legacy architecture detection in infer.py.
+Patch to add RefineGAN-Legacy architecture detection in infer.py (upstream 3.7.2).
 
-This patch adds:
-1. A helper function `_detect_refinegan_legacy_from_weights()` to detect legacy model weights
-2. Logic to override vocoder to "RefineGAN-Legacy" when legacy weights are detected
+This patch adds, both required:
+1. A helper function `_detect_refinegan_legacy_from_weights()` to detect legacy
+   model weights (module level, right after the logging configuration)
+2. Logic in VoiceConverter.setup_network() that overrides the vocoder to
+   "RefineGAN-Legacy" when legacy weights are detected
 
 This enables loading models trained elsewhere with the legacy RefineGAN architecture
 without producing garbage output.
+
+Both edits are pure insertions, so everything upstream has around them is left byte
+for byte, including the `isinstance(self.cpt, ONNXRVC)` early return and the
+`self.net_g.float().to(self.config.device)` order.
+
+Exit codes:
+  0  applied, or already applied and verified
+  2  a required anchor was not found, or verification failed (nothing is written)
+
+Needs patches/patch_refinegan_legacy.py (the "RefineGAN-Legacy" vocoder) as well.
 """
 
-import os
+import argparse
+import sys
+from pathlib import Path
+
+EXIT_OK = 0
+EXIT_FAILED = 2
 
 _IDEMPOTENCY_MARKER = "# RefineGAN-Legacy inference detection added"
 
-
-def patch_infer(base_path: str) -> bool:
-    """Patch infer.py to add RefineGAN-Legacy architecture detection.
-
-    Args:
-        base_path: Directory containing infer.py (e.g., rvc/infer/)
-
-    Returns:
-        True if patched successfully, False otherwise
-    """
-    infer_path = os.path.join(base_path, "infer.py")
-
-    if not os.path.exists(infer_path):
-        raise FileNotFoundError(f"infer.py not found at {infer_path}")
-
-    with open(infer_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    if _IDEMPOTENCY_MARKER in content:
-        print("  [RefineGAN-Legacy infer.py] Already patched, skipping.")
-        return True
-
-    print("  [RefineGAN-Legacy infer.py] Patching...")
-
-    # Add helper function for legacy detection
-    helper_func = '''def _detect_refinegan_legacy_from_weights(weights: dict) -> bool:
+HELPER_MARKER = "def _detect_refinegan_legacy_from_weights(weights: dict) -> bool:"
+HELPER_ANCHOR = 'logging.getLogger("faiss.loader").setLevel(logging.WARNING)\n'
+HELPER_FUNC = '''def _detect_refinegan_legacy_from_weights(weights: dict) -> bool:
     """Detect if model weights use legacy RefineGAN architecture.
 
     Legacy architecture (original RVC-Boss) has:
@@ -68,119 +62,168 @@ def patch_infer(base_path: str) -> bool:
         return False
 '''
 
-    if helper_func not in content:
-        # Find the insertion point after the logging config
-        insertion_marker = 'logging.getLogger("faiss.loader").setLevel(logging.WARNING)'
-        content = content.replace(
-            insertion_marker,
-            insertion_marker + "\n\n" + helper_func,
-        )
-
-    # Modify setup_network to detect legacy vocoder
-    # Note: Handle both single and double quote variations
-    old_setup_single = '''    def setup_network(self):
-        """
-        Sets up the network configuration based on the loaded checkpoint.
-        """
-        if self.cpt is not None:
-            self.tgt_sr = self.cpt["config"][-1]
-            self.cpt["config"][-3] = self.cpt["weight"]["emb_g.weight"].shape[0]
-            self.use_f0 = self.cpt.get("f0", 1)
-
-            self.version = self.cpt.get("version", "v1")
-            self.text_enc_hidden_dim = 768 if self.version == "v2" else 256
-            self.vocoder = self.cpt.get("vocoder", "HiFi-GAN")
-            self.net_g = Synthesizer(
-                *self.cpt["config"],
-                use_f0=self.use_f0,
-                text_enc_hidden_dim=self.text_enc_hidden_dim,
-                vocoder=self.vocoder,
-            )
-            del self.net_g.enc_q
-            self.net_g.load_state_dict(self.cpt["weight"], strict=False)
-            self.net_g = self.net_g.to(self.config.device).float()
-            self.net_g.eval()'''
-
-    old_setup_double = '''    def setup_network(self):
-        """
-        Sets up the network configuration based on the loaded checkpoint.
-        """
-        if self.cpt is not None:
-            self.tgt_sr = self.cpt["config"][-1]
-            self.cpt["config"][-3] = self.cpt["weight"]["emb_g.weight"].shape[0]
-            self.use_f0 = self.cpt.get("f0", 1)
-
-            self.version = self.cpt.get("version", "v1")
-            self.text_enc_hidden_dim = 768 if self.version == "v2" else 256
-            self.vocoder = self.cpt.get("vocoder", "HiFi-GAN")
-            self.net_g = Synthesizer(
-                *self.cpt["config"],
-                use_f0=self.use_f0,
-                text_enc_hidden_dim=self.text_enc_hidden_dim,
-                vocoder=self.vocoder,
-            )
-            del self.net_g.enc_q
-            self.net_g.load_state_dict(self.cpt["weight"], strict=False)
-            self.net_g = self.net_g.to(self.config.device).float()
-            self.net_g.eval()'''
-
-    new_setup = '''    def setup_network(self):
-        """
-        Sets up the network configuration based on the loaded checkpoint.
-        """
-        if self.cpt is not None:
-            self.tgt_sr = self.cpt["config"][-1]
-            self.cpt["config"][-3] = self.cpt["weight"]["emb_g.weight"].shape[0]
-            self.use_f0 = self.cpt.get("f0", 1)
-
-            self.version = self.cpt.get("version", "v1")
-            self.text_enc_hidden_dim = 768 if self.version == "v2" else 256
-            self.vocoder = self.cpt.get("vocoder", "HiFi-GAN")
-
-            # Detect legacy RefineGAN architecture from checkpoint weights
+DETECT_MARKER = 'self.vocoder = "RefineGAN-Legacy"'
+DETECT_ANCHOR = (
+    '            self.vocoder = self.cpt.get("vocoder", "HiFi-GAN")\n'
+    "            self.net_g = Synthesizer(\n"
+)
+DETECT_BLOCK = """            # Detect legacy RefineGAN architecture from checkpoint weights
             if self.vocoder == "RefineGAN" and _detect_refinegan_legacy_from_weights(
                 self.cpt["weight"]
             ):
                 self.vocoder = "RefineGAN-Legacy"
                 logging.info("Detected legacy RefineGAN architecture, using RefineGAN-Legacy vocoder")
+"""
+DETECT_NEW = (
+    '            self.vocoder = self.cpt.get("vocoder", "HiFi-GAN")\n'
+    + DETECT_BLOCK
+    + "            self.net_g = Synthesizer(\n"
+)
 
-            self.net_g = Synthesizer(
-                *self.cpt["config"],
-                use_f0=self.use_f0,
-                text_enc_hidden_dim=self.text_enc_hidden_dim,
-                vocoder=self.vocoder,
-            )
-            del self.net_g.enc_q
-            self.net_g.load_state_dict(self.cpt["weight"], strict=False)
-            self.net_g = self.net_g.to(self.config.device).float()
-            self.net_g.eval()'''
+MARKERS = (
+    ("helper _detect_refinegan_legacy_from_weights()", HELPER_MARKER),
+    ("legacy detection in setup_network()", DETECT_MARKER),
+)
+# Upstream lines around the inserted block; they must survive untouched.
+UPSTREAM_KEEP = (
+    "            if isinstance(self.cpt, ONNXRVC):",
+    '            self.net_g.load_state_dict(self.cpt["weight"], strict=False)',
+    "            self.net_g = self.net_g.float().to(self.config.device)",
+)
 
-    # Try both single and double quote versions
-    if old_setup_single in content:
-        content = content.replace(old_setup_single, new_setup)
-    elif old_setup_double in content:
-        content = content.replace(old_setup_double, new_setup)
+
+class PatchError(Exception):
+    """A required anchor was not found, or did not behave as expected."""
+
+
+def patch_content(content):
+    """Return (patched content, [(status, sub-patch name), ...])."""
+    notes = []
+
+    if HELPER_MARKER in content:
+        notes.append(("already", "helper _detect_refinegan_legacy_from_weights()"))
+    elif content.count(HELPER_ANCHOR) == 1:
+        content = content.replace(HELPER_ANCHOR, HELPER_ANCHOR + "\n\n" + HELPER_FUNC)
+        notes.append(("applied", "helper _detect_refinegan_legacy_from_weights()"))
     else:
-        print("  [RefineGAN-Legacy infer.py] Could not find setup_network to patch")
-        return False
+        raise PatchError("helper: anchor not found: %r" % HELPER_ANCHOR)
 
-    # Add idempotency marker
-    content = content.rstrip() + "\n" + _IDEMPOTENCY_MARKER + "\n"
+    if DETECT_MARKER in content:
+        notes.append(("already", "legacy detection in setup_network()"))
+    elif content.count(DETECT_ANCHOR) == 1:
+        content = content.replace(DETECT_ANCHOR, DETECT_NEW)
+        notes.append(("applied", "legacy detection in setup_network()"))
+    else:
+        raise PatchError("setup_network: anchor not found: %r" % DETECT_ANCHOR)
 
-    with open(infer_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    if _IDEMPOTENCY_MARKER in content:
+        notes.append(("already", "idempotency marker"))
+    else:
+        if not content.endswith("\n"):
+            content += "\n"
+        content += _IDEMPOTENCY_MARKER + "\n"
+        notes.append(("applied", "idempotency marker"))
+    return content, notes
 
-    print("  [RefineGAN-Legacy infer.py] Patched successfully")
-    return True
+
+def verify(original, content):
+    """Return a list of problems; empty means every sub-patch has landed."""
+    problems = []
+    for name, marker in MARKERS:
+        found = content.count(marker)
+        if found != 1:
+            problems.append("%s: expected 1 x %r, found %d" % (name, marker, found))
+    if content.count(_IDEMPOTENCY_MARKER) != 1:
+        problems.append(
+            "idempotency marker: expected exactly 1 x %r" % _IDEMPOTENCY_MARKER
+        )
+    for line in UPSTREAM_KEEP:
+        if content.count(line) != original.count(line):
+            problems.append("upstream line changed: %r" % line)
+    return problems
+
+
+def syntax_problem(path, content):
+    """Return a message when the content is not valid Python, else None."""
+    try:
+        compile(content, str(path), "exec")
+    except SyntaxError as error:
+        return "%s: does not compile: %s" % (path, error)
+    return None
+
+
+def _read(path):
+    # newline="" keeps the file's own line endings, byte for byte.
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def patch_infer(base_path, dry_run=False):
+    """Patch infer.py; returns the process exit code."""
+    infer_path = Path(base_path) / "infer.py"
+    tag = "[RefineGAN-Legacy infer.py]"
+
+    def fail(message):
+        print("  %s [FAIL] %s" % (tag, message))
+        print("  %s RESULT: FAILED (exit 2), nothing written" % tag)
+        return EXIT_FAILED
+
+    if not infer_path.is_file():
+        return fail("file not found: %s" % infer_path)
+
+    print("%s Patching: %s" % (tag, infer_path))
+    print("%s Mode: %s" % (tag, "dry-run" if dry_run else "apply"))
+    original = _read(infer_path)
+    try:
+        content, notes = patch_content(original)
+    except PatchError as error:
+        return fail(error)
+    for status, name in notes:
+        print("  %s [%s] %s" % (tag, status, name))
+
+    problems = verify(original, content)
+    problem = syntax_problem(infer_path, content)
+    if problem:
+        problems.append(problem)
+    if problems:
+        return fail("; ".join(problems))
+
+    changed = content != original
+    if dry_run:
+        print(
+            "  %s RESULT: DRY-RUN OK, nothing written (%s)"
+            % (tag, "1 file would change" if changed else "already applied")
+        )
+        return EXIT_OK
+    if changed:
+        with open(infer_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        print("  [RefineGAN-Legacy infer.py] wrote %s" % infer_path)
+    print(
+        "  [RefineGAN-Legacy infer.py] RESULT: %s"
+        % ("APPLIED" if changed else "ALREADY APPLIED")
+    )
+    return EXIT_OK
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Add RefineGAN-Legacy architecture detection to rvc/infer/infer.py"
+    )
+    parser.add_argument(
+        "base_path",
+        nargs="?",
+        default="rvc/infer",
+        help="Directory holding infer.py",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing anything",
+    )
+    args = parser.parse_args()
+    return patch_infer(args.base_path, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python patch_refinegan_legacy_infer.py <base_path>")
-        sys.exit(1)
-
-    base_path = sys.argv[1]
-    success = patch_infer(base_path)
-    sys.exit(0 if success else 2)
+    sys.exit(main())

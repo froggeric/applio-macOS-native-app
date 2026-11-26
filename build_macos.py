@@ -89,7 +89,7 @@ import PyInstaller.__main__
 # Configuration
 # =================================================================
 APP_NAME = "Applio"
-BUILD_NUMBER = 2  # 3.6.4.2: PR #1280 merged (8/8 a11y program), sync 2026-09-11
+BUILD_NUMBER = 1  # 3.7.2.1: upstream 3.7.2 synced 2026-11-26
 
 
 # Read version from the tracked assets/config_template.json first (the source of
@@ -209,9 +209,44 @@ MODELS_INSTALLER = args.models_installer
 VERSION = f"{APPLIO_VERSION}.{args.build_number}"
 
 # Honor --identity / --team-id / --keychain-profile overrides
+_EXPLICIT_IDENTITY = args.identity != DEVELOPER_IDENTITY
 DEVELOPER_IDENTITY = args.identity
 TEAM_ID = args.team_id
 KEYCHAIN_PROFILE = args.keychain_profile
+
+
+def resolve_signing_identity():
+    """Return what to pass to `codesign --sign`.
+
+    The Developer ID name contains accented characters, and on macOS 27
+    codesign does not find the identity by that name ("no identity found"),
+    although `security find-identity` lists it. Unless --identity was given,
+    the SHA-1 fingerprint of the valid codesigning identity whose name carries
+    the team ID is used; the name stays as the fallback.
+    """
+    if _EXPLICIT_IDENTITY:
+        return DEVELOPER_IDENTITY
+    try:
+        result = subprocess.run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return DEVELOPER_IDENTITY
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if (
+                len(fields) >= 2
+                and "Developer ID Application" in line
+                and TEAM_ID in line
+            ):
+                return fields[1]
+    return DEVELOPER_IDENTITY
+
+
+SIGNING_IDENTITY = resolve_signing_identity()
 
 # Notarytool auth: inline App Store Connect API key (CI, no keychain needed) if
 # provided, else the keychain profile (local interactive). Selected once, used by
@@ -363,7 +398,7 @@ def build_models_installer_app():
                 "--force",
                 "--deep",
                 "--sign",
-                DEVELOPER_IDENTITY,
+                SIGNING_IDENTITY,
                 "--options",
                 "runtime",
                 "--timestamp",
@@ -686,6 +721,176 @@ def render_guide_html(repo_root=None):
 # =================================================================
 # Pre-build: Patch source files before PyInstaller bundles them
 # =================================================================
+# Proof that each patch landed: {patcher: [(file, exact substring, least count)]}.
+#
+# A patcher's exit code is not enough. The 2026-11 upstream sync found four
+# patchers that exit 0 after doing only part of their work (process tracking:
+# three of four launches left untracked; RefineGAN legacy training: detection
+# block never inserted; dataset paths and Browse buttons: missing fields
+# reported as "skipped"). Such an app starts and then fails in use. So after
+# the patchers run, every marker below is counted in its file and the build
+# stops when one is missing. One marker per required sub-patch, each a
+# substring that exists only once that sub-patch is applied.
+#
+# After an upstream sync, update the patchers first, then make this table
+# match what they inject (a stale marker fails the build just like a stale
+# patcher).
+PATCH_MARKERS = {
+    "patches/patch_dataset_paths.py": [
+        ("core.py", "# CRITICAL: Resolve to absolute path BEFORE building command", 1),
+    ],
+    "patches/patch_download_paths.py": [
+        ("tabs/download/download.py", "def _applio_custom_pretrained_dir(", 1),
+        ("tabs/download/download.py", "_applio_custom_pretrained_dir(", 3),
+    ],
+    "patches/patch_process_tracking.py": [
+        ("core.py", "# === Process Tracking (injected by patch) ===", 1),
+        ("core.py", "def _applio_tracked_run(", 1),
+        ("core.py", "def _applio_tee_to_session_log(", 1),
+        ("core.py", 'env.pop("APPLIO_TERMINAL_LOG", None)', 1),
+        ("core.py", "def _snapshot_training_metrics(", 1),
+        ("core.py", '_applio_tracked_run("preprocess",', 1),
+        ("core.py", '_applio_tracked_run("extract",', 1),
+        ("core.py", '_applio_tracked_run("training",', 1),
+        ("core.py", '_applio_tracked_run("tts",', 1),
+    ],
+    "patches/patch_subprocess_validation.py": [
+        ("core.py", "# Validate preprocessing and extraction before training", 1),
+        ("core.py", "# Validate output was produced", 1),
+        ("core.py", "# Validate extracted files exist", 1),
+    ],
+    "patches/patch_custom_pretrained_paths.py": [
+        ("core.py", "_resolve_custom_pretrained_path(", 2),
+    ],
+    "patches/patch_train_paths.py": [
+        ("rvc/train/train.py", "_get_applio_logs_path", 1),
+    ],
+    "patches/patch_mute_paths.py": [
+        ("rvc/train/extract/preparing_files.py", "_get_mute_base_path", 1),
+    ],
+    "patches/patch_f0_model_paths.py": [
+        ("rvc/lib/predictors/f0.py", "_F0_MODEL_PATH_PATCHED", 1),
+    ],
+    "patches/patch_pretrained_rates.py": [
+        (
+            "rvc/lib/tools/prerequisites_download.py",
+            '"HiFi-GAN": (32000, 40000, 44100, 48000)',
+            1,
+        ),
+        (
+            "rvc/lib/tools/prerequisites_download.py",
+            '"RefineGAN": (24000, 32000, 44100)',
+            1,
+        ),
+        ("rvc/lib/tools/prerequisites_download.py", "if int(sample_rate) == 44100:", 1),
+    ],
+    "patches/patch_loading_html.py": [
+        ("assets/loading.html", 'id="version-line"', 1),
+    ],
+    "patches/patch_version_checker.py": [
+        ("assets/version_checker.py", "def _applio_version_config_path(", 1),
+    ],
+    "patches/patch_train_44100.py": [
+        ("tabs/train/train.py", 'choices=["32000", "40000", "44100", "48000"]', 1),
+        ("tabs/train/train.py", '"choices": ["32000", "40000", "44100", "48000"]', 1),
+        ("tabs/train/train.py", '"choices": ["24000", "32000", "44100"]', 1),
+        # preprocess + train get it from the patch, extract already has it
+        ("core.py", 'click.Choice(["32000", "40000", "44100", "48000"])', 3),
+    ],
+    "patches/patch_multiprocessing.py": [
+        ("rvc/train/extract/extract.py", "pass  # Context already set", 1),
+    ],
+    "patches/patch_extract_error_logging.py": [
+        ("rvc/train/extract/extract.py", "_EXTRACT_ERROR_LOGGING_PATCHED", 1),
+    ],
+    "patches/patch_preprocess_error_logging.py": [
+        ("rvc/train/preprocess/preprocess.py", "_PREPROCESS_ERROR_LOGGING_PATCHED", 1),
+    ],
+    "patches/patch_refinegan_legacy_discriminator.py": [
+        (
+            "rvc/lib/algorithm/discriminators.py",
+            "# DiscriminatorRLegacy support added",
+            1,
+        ),
+    ],
+    "patches/patch_refinegan_legacy_train.py": [
+        (
+            "rvc/train/train.py",
+            "def _detect_refinegan_legacy(pretrain_path: str) -> bool:",
+            1,
+        ),
+        ("rvc/train/train.py", "is_legacy = _detect_refinegan_legacy(pretrainG)", 1),
+    ],
+    "patches/patch_refinegan_legacy.py": [
+        (
+            "rvc/lib/algorithm/synthesizers.py",
+            "# RefineGAN-Legacy vocoder support added",
+            1,
+        ),
+    ],
+    "patches/patch_refinegan_legacy_infer.py": [
+        (
+            "rvc/infer/infer.py",
+            "def _detect_refinegan_legacy_from_weights(weights: dict) -> bool:",
+            1,
+        ),
+        ("rvc/infer/infer.py", 'self.vocoder = "RefineGAN-Legacy"', 1),
+    ],
+    "patches/patch_inference_progress.py": [
+        ("rvc/infer/infer.py", "(gr.Warning if warning else gr.Info)(message)", 1),
+        (
+            "rvc/infer/infer.py",
+            "# === Inference Progress Tracking (injected by patch) ===",
+            1,
+        ),
+        ("rvc/infer/infer.py", "if _infer_cancel_requested():", 1),
+        ("rvc/infer/infer.py", "_infer_single_ctx = _infer_single_begin(", 1),
+    ],
+    "patches/patch_stop_infer.py": [
+        ("tabs/settings/sections/restart.py", "inference_cancel.flag", 1),
+    ],
+    "patches/patch_stop_feedback.py": [
+        ("tabs/settings/sections/restart.py", "# _APPLIO_A11Y_STOP_TRAIN", 1),
+        ("tabs/inference/inference.py", "# _APPLIO_A11Y_UPLOAD", 1),
+    ],
+    "patches/patch_progress_routes.py": [
+        ("app.py", "_APPLIO_A11Y_ROUTES_", 1),
+    ],
+    # One path validation per Browse field: 3 + 3 + 3 + 1 + 2 + 1 = 13 fields.
+    "patches/patch_browse_buttons.py": [
+        ("tabs/train/train.py", "applio_browse_ui.attach_path_validation(", 3),
+        ("tabs/inference/inference.py", "applio_browse_ui.attach_path_validation(", 3),
+        ("tabs/tts/tts.py", "applio_browse_ui.attach_path_validation(", 3),
+        ("tabs/realtime/realtime.py", "applio_browse_ui.attach_path_validation(", 1),
+        (
+            "tabs/voice_blender/voice_blender.py",
+            "applio_browse_ui.attach_path_validation(",
+            2,
+        ),
+        (
+            "tabs/extra/sections/processing.py",
+            "applio_browse_ui.attach_path_validation(",
+            1,
+        ),
+    ],
+    "patches/patch_web_a11y_payload.py": [
+        ("app.py", '"js": _applio_a11y_js(client_mode),', 1),
+    ],
+}
+
+
+def _check_patch_table(patches_to_apply):
+    """Fail fast on an inconsistent patch table (a patcher without markers)."""
+    applied = {patcher for patcher, _, _, _ in patches_to_apply}
+    for patcher in sorted(applied - set(PATCH_MARKERS)):
+        raise ValueError(
+            f"{patcher} is applied but has no entry in PATCH_MARKERS; "
+            "add the markers that prove it landed"
+        )
+    for patcher in sorted(set(PATCH_MARKERS) - applied):
+        raise ValueError(f"{patcher} has markers but is not applied")
+
+
 def pre_build_patch():
     """
     Patch source files BEFORE PyInstaller bundles them.
@@ -718,18 +923,6 @@ def pre_build_patch():
     # IMPORTANT: Order matters! Process tracking MUST come before subprocess validation.
     patches_to_apply = [
         # Directory-based patchers (pass dirname)
-        (
-            "patches/patch_data_paths.py",
-            "core.py",
-            "core.py - file-based path resolution",
-            "dir",
-        ),
-        (
-            "patches/patch_preflight_validation.py",
-            "core.py",
-            "core.py - pre-flight dataset validation",
-            "dir",
-        ),
         (
             "patches/patch_dataset_paths.py",
             "core.py",
@@ -773,15 +966,15 @@ def pre_build_patch():
             "dir",
         ),
         (
-            "patches/patch_pretrained_selector.py",
-            "rvc/lib/tools/pretrained_selector.py",
-            "pretrained_selector.py - BASE_PATH resolution",
-            "dir",
-        ),
-        (
             "patches/patch_f0_model_paths.py",
             "rvc/lib/predictors/f0.py",
             "f0.py - absolute model paths for frozen app",
+            "dir",
+        ),
+        (
+            "patches/patch_pretrained_rates.py",
+            "rvc/lib/tools/prerequisites_download.py",
+            "prerequisites_download.py - accept 44100 in the built-in pretrained lookup",
             "dir",
         ),
         # File-based patchers (pass full file path)
@@ -937,24 +1130,29 @@ def pre_build_patch():
                         raise ValueError(
                             "Patch order violates dependencies. Fix the patches_to_apply order."
                         )
+    _check_patch_table(patches_to_apply)
 
-    patched_files = {}  # Maps source_file -> original content
-    patch_failures = []  # (description, exit code) — any nonzero fails the build
+    # What was on disk before any patcher ran: every tracked text file, so a
+    # patcher that edits a file other than the one listed for it (e.g.
+    # patch_train_44100 also edits core.py) is restored too.
+    snapshot = _tracked_text_files()
+    if snapshot is None:  # not a git checkout: only the listed source files
+        snapshot = {}
+        for _, source_file, _, _ in patches_to_apply:
+            data = _read_bytes(source_file)
+            if data is not None:
+                snapshot[source_file] = data
+
+    patch_failures = []  # any entry fails the build
 
     for patcher_path, source_file, description, patcher_type in patches_to_apply:
         if not os.path.exists(patcher_path):
-            patch_failures.append((description, "patcher not found"))
+            patch_failures.append(f"{description} (patcher not found)")
             continue
 
         if not os.path.exists(source_file):
-            patch_failures.append((description, "source file not found"))
+            patch_failures.append(f"{description} (source file not found)")
             continue
-
-        # Read and store original content ONLY if not already stored
-        # (handles multiple patchers modifying the same file)
-        if source_file not in patched_files:
-            with open(source_file, "r", encoding="utf-8") as f:
-                patched_files[source_file] = f.read()
 
         # Determine the argument based on patcher type
         if patcher_type == "dir":
@@ -971,22 +1169,30 @@ def pre_build_patch():
         for line in result.stdout.strip().split("\n"):
             if line:
                 print(f"    {line}")
+        if result.stderr.strip():
+            print(f"    [stderr] {result.stderr.strip()[-600:]}")
 
         if result.returncode != 0:
             # 0 = patched or already applied. 2 = anchor miss (upstream moved
             # the anchor); anything else is a crash or invocation failure.
             # Both ship a broken app if skipped.
-            patch_failures.append((description, str(result.returncode)))
+            patch_failures.append(f"{description} (exit code {result.returncode})")
+
+    # Exit codes alone are not proof (see PATCH_MARKERS).
+    if not patch_failures:
+        patch_failures = verify_patch_markers()
 
     if patch_failures:
-        for description, why in patch_failures:
-            print(f"  PATCH FAILURE: {description} ({why})")
+        for problem in patch_failures:
+            print(f"  PATCH FAILURE: {problem}")
+        _restore_files(snapshot)
         raise SystemExit(
-            "Patchers failed (anchor miss = exit 2, see CLAUDE.md "
-            "'Re-pointing patches after an upstream sync')."
+            "Patchers failed (exit 2 = anchor miss, 'expected at least' = a patch "
+            "landed only partly). Sources restored. See CLAUDE.md "
+            "'Re-pointing patches after an upstream sync'."
         )
 
-    return patched_files
+    return {path: data for path, data in snapshot.items() if _read_bytes(path) != data}
 
 
 def post_build_restore(patched_files):
@@ -1000,13 +1206,78 @@ def post_build_restore(patched_files):
     print("POST-BUILD: Restoring source files")
     print("=" * 60)
 
-    for source_file, original_content in patched_files.items():
+    _restore_files(patched_files)
+
+
+def _read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _read_bytes(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _restore_files(snapshot):
+    """Put back every file whose bytes differ from `snapshot`.
+
+    Bytes, not text: some upstream files use CRLF line endings, and a
+    text-mode read/write round trip turns every line of them into a change.
+    """
+    for path, original in snapshot.items():
         try:
-            with open(source_file, "w", encoding="utf-8") as f:
-                f.write(original_content)
-            print(f"  Restored: {source_file}")
+            if _read_bytes(path) == original:
+                continue
+            with open(path, "wb") as f:
+                f.write(original)
+            print(f"  Restored: {path}")
         except Exception as e:
-            print(f"  WARNING: Failed to restore {source_file}: {e}")
+            print(f"  WARNING: Failed to restore {path}: {e}")
+
+
+def _tracked_text_files():
+    """Return {path: bytes} for every tracked text file a patcher could touch.
+
+    Restoring from this snapshot puts back exactly what was on disk before the
+    patchers ran, uncommitted edits included. Returns None outside a git
+    checkout.
+    """
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-z"], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    suffixes = (".py", ".html", ".js", ".css", ".json", ".txt", ".sh", ".spec")
+    snapshot = {}
+    for path in listing.split("\0"):
+        if path.endswith(suffixes) and os.path.isfile(path):
+            data = _read_bytes(path)
+            if data is not None:
+                snapshot[path] = data
+    return snapshot
+
+
+def verify_patch_markers():
+    """Count every marker in PATCH_MARKERS. Returns a list of problems."""
+    problems = []
+    for patcher_path, markers in PATCH_MARKERS.items():
+        for source_file, marker, min_count in markers:
+            content = _read_text(source_file)
+            count = content.count(marker) if content is not None else 0
+            if count < min_count:
+                problems.append(
+                    f"{patcher_path}: {source_file} has {repr(marker)} {count}x, "
+                    f"expected at least {min_count}"
+                )
+    return problems
 
 
 # =================================================================
@@ -1020,10 +1291,14 @@ print()
 
 # PATCH SOURCE FILES BEFORE BUILD
 patched_files = pre_build_patch()
-render_guide_html()
+try:
+    render_guide_html()
 
-print("\nStarting PyInstaller build...")
-PyInstaller.__main__.run(pyinstaller_args)
+    print("\nStarting PyInstaller build...")
+    PyInstaller.__main__.run(pyinstaller_args)
+finally:
+    # RESTORE SOURCE FILES AFTER BUILD, also when the build fails
+    post_build_restore(patched_files)
 
 # Write build_info.json for runtime version reading
 build_info_path = os.path.join(
@@ -1040,9 +1315,6 @@ with open(build_info_path, "w", encoding="utf-8") as f:
         f,
     )
 print(f"  Wrote build_info.json: version={VERSION}")
-
-# RESTORE SOURCE FILES AFTER BUILD
-post_build_restore(patched_files)
 
 
 # =================================================================
@@ -1365,12 +1637,16 @@ def sign_app():
         return False
 
     print(f"  Identity: {DEVELOPER_IDENTITY}")
+    print(f"  Signing with: {SIGNING_IDENTITY}")
     _repair_python_framework_symlinks(app_path)
 
     # Discover all Mach-O binaries (incl. bare executables in Contents/Resources).
     print("  Discovering Mach-O binaries...")
     binaries = _discover_macho(app_path)
     print(f"  Found {len(binaries)} Mach-O binaries")
+    if not binaries:
+        print("ERROR: no Mach-O binaries found inside the app bundle")
+        return False
 
     # Step 1: strip existing (PyInstaller ad-hoc) signatures — idempotent re-runs.
     print("  Removing existing signatures...")
@@ -1388,13 +1664,14 @@ def sign_app():
     # is unnecessary and can cause codesign warnings).
     print("  Signing binaries (hardened runtime)...")
     signed = 0
+    signing_errors = []
     for b in binaries:
         r = subprocess.run(
             [
                 "codesign",
                 "--force",
                 "--sign",
-                DEVELOPER_IDENTITY,
+                SIGNING_IDENTITY,
                 "--options",
                 "runtime",
                 "--timestamp",
@@ -1406,8 +1683,16 @@ def sign_app():
         if r.returncode == 0:
             signed += 1
         else:
-            print(f"  WARNING: failed to sign {b}: {(r.stderr or '').strip()}")
+            signing_errors.append(f"{b}: {(r.stderr or '').strip()}")
     print(f"  Signed {signed}/{len(binaries)} binaries")
+    if signing_errors:
+        # Usually every binary fails the same way (identity not found): one
+        # line is enough to see why.
+        print(
+            f"ERROR: {len(signing_errors)} binaries could not be signed. First error:"
+        )
+        print(f"  {signing_errors[0]}")
+        return False
 
     # Step 3: seal the outer .app bundle LAST, WITH entitlements, WITHOUT --deep.
     # --deep is deprecated for signing; all nested code is already sealed above.
@@ -1417,7 +1702,7 @@ def sign_app():
             "codesign",
             "--force",
             "--sign",
-            DEVELOPER_IDENTITY,
+            SIGNING_IDENTITY,
             "--entitlements",
             ENTITLEMENTS_PATH,
             "--options",
@@ -1467,10 +1752,30 @@ def sign_app():
 
 sign_success = sign_app()
 
+if SIGN_APP and not sign_success:
+    # Never go on to a DMG or a notarization of an app that is not signed.
+    print(
+        "\nERROR: Developer ID signing was requested and failed. "
+        "The DMG was not built and nothing was notarized."
+    )
+    sys.exit(1)
+
 
 # =================================================================
 # DMG Creation
 # =================================================================
+def _bundle_inventory(root):
+    """(files, symlinks) of a bundle, to compare a copy with its source."""
+    files = links = 0
+    for base, _, names in os.walk(root):
+        for name in names:
+            if os.path.islink(os.path.join(base, name)):
+                links += 1
+            else:
+                files += 1
+    return files, links
+
+
 def create_dmg():
     """Create a signed DMG installer."""
     if not CREATE_DMG:
@@ -1494,15 +1799,29 @@ def create_dmg():
         shutil.rmtree(dmg_folder)
     os.makedirs(dmg_folder)
 
-    # Copy app to DMG folder. symlinks=True is REQUIRED: Python.framework uses
+    # Copy app to DMG folder. Symlinks MUST survive: Python.framework uses
     # symlinks (Python -> Versions/Current/Python, Resources -> Versions/Current/Resources,
-    # Current -> Versions/3.x). The default symlinks=False flattens them into real files,
-    # breaking the framework's signature seal → notarization rejects the DMG with
+    # Current -> Versions/3.x). A copy that flattens them into real files
+    # breaks the framework's signature seal → notarization rejects the DMG with
     # "The signature of the binary is invalid" on the Python framework paths.
+    # ditto keeps them (and extended attributes); the inventory check proves it.
     print("  Preparing DMG contents...")
-    shutil.copytree(
-        app_path, os.path.join(dmg_folder, f"{APP_NAME}.app"), symlinks=True
+    app_copy = os.path.join(dmg_folder, f"{APP_NAME}.app")
+    copy = subprocess.run(["ditto", app_path, app_copy], capture_output=True, text=True)
+    if copy.returncode != 0:
+        print(f"ERROR: could not copy the app for the DMG: {copy.stderr}")
+        shutil.rmtree(dmg_folder, ignore_errors=True)
+        return None
+    source_inventory, copy_inventory = _bundle_inventory(app_path), _bundle_inventory(
+        app_copy
     )
+    if source_inventory != copy_inventory:
+        print(
+            "ERROR: the DMG copy of the app differs from the signed app "
+            f"{source_inventory} vs {copy_inventory} (files, symlinks)"
+        )
+        shutil.rmtree(dmg_folder, ignore_errors=True)
+        return None
 
     # Create symbolic link to Applications folder
     applications_link = os.path.join(dmg_folder, "Applications")
@@ -1610,7 +1929,7 @@ def _sign_dmg(path):
     """Sign a DMG with Developer ID + secure timestamp. A DMG is not code, so no
     hardened runtime / entitlements — just --sign --timestamp."""
     r = subprocess.run(
-        ["codesign", "--force", "--sign", DEVELOPER_IDENTITY, "--timestamp", path],
+        ["codesign", "--force", "--sign", SIGNING_IDENTITY, "--timestamp", path],
         capture_output=True,
         text=True,
     )

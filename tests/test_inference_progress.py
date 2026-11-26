@@ -195,7 +195,9 @@ def test_single_conversion_seam_in_patched_engine():
     patched = _patched_infer_source()
     # Seam head: begin AFTER get_vc (a get_vc failure must leave NO record
     # behind) and BEFORE start_time; the body moves one indent level into a try.
-    get_vc = patched.index("self.get_vc(model_path, sid)")
+    get_vc = patched.index(
+        "self.get_vc(model_path, sid, inference_engine, onnx_precision)"
+    )
     begin = patched.index("_infer_single_ctx = _infer_single_begin(")
     start_time = patched.index("\n        start_time = time.time()\n")
     try_kw = patched.index("\n        try:\n", begin)

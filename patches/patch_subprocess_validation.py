@@ -1,279 +1,268 @@
 #!/usr/bin/env python3
 """
-Patcher to add subprocess return code checking and output validation to core.py.
+Patcher to validate training inputs in core.py before a training run is launched.
 
-This patcher addresses a training failure issue where preprocessing produced no
-output (empty dataset path), but this wasn't detected. The patches add:
+Sub-patches, each reported as applied / already applied / skipped:
 
-1. Return code checking for subprocess calls
-2. Validation that preprocessing produced output (model_info.json with total_seconds > 0)
-3. Validation that feature extraction produced output (extracted/ directory not empty)
-4. Validation that preprocessing was done before allowing training
+1. run_train_script, "train gate" (REQUIRED): before the train command is built, check
+   that preprocessing and extraction produced their output: logs/<model>/model_info.json
+   with total_seconds > 0, and a non-empty logs/<model>/extracted/. Upstream 3.7.2
+   launches the training script without looking; the script then exits when its
+   config.json is missing, and it never checks for an empty dataset or an empty
+   extraction.
+
+2. run_preprocess_script output check (optional): the same model_info.json check right
+   after preprocessing.
+
+3. run_extract_script output check (optional): the non-empty extracted/ check right
+   after extraction.
+
+The two output checks are not required. Upstream now checks every child's return code
+(`if result.returncode != 0:` after each run_quiet call), its preprocess script exits
+non-zero on a missing or empty dataset, and the required train gate re-validates the
+same conditions before training. When their anchors are missing they are skipped.
+
+Failure messages start with upstream's own prefixes ("Training failed", "Preprocessing
+failed", "Feature extraction failed"). tabs/train/train.py `_run_training_step` relies
+on them to raise a warning and to block the steps that depend on the failed one; any
+other string is shown as a plain info toast.
+
+The anchors are the `pg, pd = "", ""` line and the two success-return lines. None of
+them is touched by patch_process_tracking.py, which only swaps the run_quiet launch
+lines, so the order of the two patchers no longer matters.
+
+Exit codes: 0 = the required sub-patch is applied or already applied (optional ones
+applied or skipped); 2 = the required sub-patch did not land or the patched file failed
+verification (nothing is written then).
 
 Applied at build time by build_macos.py.
 """
 
 import os
-import re
-import shutil
+import sys
+
+EXIT_OK = 0
+EXIT_FAILED = 2
+
+TAG = "[patch_subprocess_validation]"
+
+# --- 1. train gate (required) -----------------------------------------------------
+TRAIN_GATE_MARKER = "# Validate preprocessing and extraction before training"
+TRAIN_GATE_COMMAND_LINE = "    train_script_path = os.path.join("
+TRAIN_GATE_ANCHOR = '        pg, pd = "", ""\n' "\n" + TRAIN_GATE_COMMAND_LINE
+TRAIN_GATE_INSERT = (
+    "    # Validate preprocessing and extraction before training\n"
+    "    model_dir = os.path.join(logs_path, model_name)\n"
+    '    model_info_path = os.path.join(model_dir, "model_info.json")\n'
+    "\n"
+    "    if not os.path.exists(model_info_path):\n"
+    '        return f"Training failed for model {model_name}: preprocessing not found. Run preprocessing first."\n'
+    "\n"
+    "    try:\n"
+    '        with open(model_info_path, "r", encoding="utf-8") as f:\n'
+    "            model_info = json.load(f)\n"
+    "    except (json.JSONDecodeError, IOError) as e:\n"
+    '        return f"Training failed for model {model_name}: could not read model_info.json: {e}."\n'
+    "\n"
+    '    total_seconds = model_info.get("total_seconds", 0)\n'
+    "    if total_seconds <= 0:\n"
+    "        return (\n"
+    '            f"Training failed for model {model_name}: no audio data was preprocessed "\n'
+    '            f"(total_seconds={total_seconds}). Re-run preprocessing with a valid dataset."\n'
+    "        )\n"
+    "\n"
+    '    extracted_dir = os.path.join(model_dir, "extracted")\n'
+    "    if not os.path.exists(extracted_dir):\n"
+    '        return f"Training failed for model {model_name}: feature extraction not found. Run feature extraction first."\n'
+    "\n"
+    "    extracted_files = os.listdir(extracted_dir)\n"
+    "    if not extracted_files:\n"
+    '        return f"Training failed for model {model_name}: extracted directory is empty. Re-run feature extraction."\n'
+    "\n"
+)
+TRAIN_GATE_REPLACEMENT = (
+    TRAIN_GATE_ANCHOR[: -len(TRAIN_GATE_COMMAND_LINE)]
+    + TRAIN_GATE_INSERT
+    + TRAIN_GATE_COMMAND_LINE
+)
+
+# --- 2. preprocess output check (optional) ----------------------------------------
+PREPROCESS_MARKER = "# Validate output was produced"
+PREPROCESS_ANCHOR = '    return f"Model {model_name} preprocessed successfully."\n'
+PREPROCESS_INSERT = (
+    "    # Validate output was produced\n"
+    "    model_dir = os.path.join(logs_path, model_name)\n"
+    '    model_info_path = os.path.join(model_dir, "model_info.json")\n'
+    "\n"
+    "    if not os.path.exists(model_info_path):\n"
+    "        return f\"Preprocessing failed for model {model_name}: model_info.json not found at {model_info_path}. Check that the dataset path '{dataset_path}' contains valid audio files.\"\n"
+    "\n"
+    "    try:\n"
+    '        with open(model_info_path, "r", encoding="utf-8") as f:\n'
+    "            model_info = json.load(f)\n"
+    "    except (json.JSONDecodeError, IOError) as e:\n"
+    '        return f"Preprocessing failed for model {model_name}: could not read model_info.json: {e}."\n'
+    "\n"
+    '    total_seconds = model_info.get("total_seconds", 0)\n'
+    "    if total_seconds <= 0:\n"
+    "        return (\n"
+    '            f"Preprocessing failed for model {model_name}: no audio data was processed "\n'
+    "            f\"(total_seconds={total_seconds}). Check that the dataset path '{dataset_path}' \"\n"
+    '            "contains valid audio files (WAV, MP3, FLAC, OGG)."\n'
+    "        )\n"
+    "\n"
+)
+PREPROCESS_REPLACEMENT = PREPROCESS_INSERT + PREPROCESS_ANCHOR
+
+# --- 3. extract output check (optional) -------------------------------------------
+EXTRACT_MARKER = "# Validate extracted files exist"
+EXTRACT_ANCHOR = '    return f"Model {model_name} extracted successfully."\n'
+EXTRACT_INSERT = (
+    "    # Validate extracted files exist\n"
+    '    extracted_dir = os.path.join(model_path, "extracted")\n'
+    "    if not os.path.exists(extracted_dir):\n"
+    '        return f"Feature extraction failed for model {model_name}: extracted directory not found at {extracted_dir}. Run preprocessing first to generate audio data for extraction."\n'
+    "\n"
+    "    extracted_files = os.listdir(extracted_dir)\n"
+    "    if not extracted_files:\n"
+    '        return f"Feature extraction failed for model {model_name}: extracted directory is empty at {extracted_dir}. Preprocessing may have failed - try re-running it."\n'
+    "\n"
+)
+EXTRACT_REPLACEMENT = EXTRACT_INSERT + EXTRACT_ANCHOR
+
+SUB_PATCHES = [
+    {
+        "name": "run_train_script train gate",
+        "required": True,
+        "marker": TRAIN_GATE_MARKER,
+        "anchor": TRAIN_GATE_ANCHOR,
+        "replacement": TRAIN_GATE_REPLACEMENT,
+    },
+    {
+        "name": "run_preprocess_script output check",
+        "required": False,
+        "marker": PREPROCESS_MARKER,
+        "anchor": PREPROCESS_ANCHOR,
+        "replacement": PREPROCESS_REPLACEMENT,
+    },
+    {
+        "name": "run_extract_script output check",
+        "required": False,
+        "marker": EXTRACT_MARKER,
+        "anchor": EXTRACT_ANCHOR,
+        "replacement": EXTRACT_REPLACEMENT,
+    },
+]
+
+# Upstream code that must survive the patch (exact text, counted before and after).
+PRESERVED_UPSTREAM = [
+    TRAIN_GATE_COMMAND_LINE,
+    PREPROCESS_ANCHOR.rstrip("\n"),
+    EXTRACT_ANCHOR.rstrip("\n"),
+    "if result.returncode != 0:",
+]
 
 
-def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
+def apply_sub_patch(content, spec):
+    """Apply one sub-patch in memory.
+
+    Returns (content, status, reason) with status "applied", "already" or "missing".
     """
-    Patch run_preprocess_script to check return code and validate model_info.json.
-
-    Args:
-        content: The content of core.py
-
-    Returns:
-        Tuple of (patched_content, success)
-    """
-    # Idempotency marker - must match the comment in injected code
-    idempotency_marker = "# Validate output was produced"
-
-    # Re-anchored for upstream 3.6.3 + process_tracking: subprocess.run is now wrapped
-    # by patch_process_tracking (Popen + returncode check), and upstream already checks
-    # returncode. So this patch now injects ONLY the post-run output validation
-    # (model_info.json was produced) right before the success return.
-    old_pattern = (
-        r'\n([ \t]+)(return f"Model \{model_name\} preprocessed successfully\.")'
-    )
-
-    # Check if already patched by looking for our idempotency marker
-    if idempotency_marker in content:
-        return content, True  # Already patched
-
-    # Check if pattern exists
-    if not re.search(old_pattern, content):
-        print(
-            "[patch_subprocess_validation] preprocess pattern not found - code may have been modified"
+    if spec["marker"] in content:
+        return content, "already", None
+    count = content.count(spec["anchor"])
+    if count != 1:
+        first_line = spec["anchor"].splitlines()[0].strip()
+        return (
+            content,
+            "missing",
+            (f"expected exactly 1 match of its anchor (`{first_line}`), found {count}"),
         )
-        return content, False
-
-    # Replacement code that validates output was produced.
-    # Note: The idempotency marker "# Validate output was produced" must match the check above
-    replacement = r"""
-\1# Validate output was produced
-\1model_dir = os.path.join(logs_path, model_name)
-\1model_info_path = os.path.join(model_dir, "model_info.json")
-\1if not os.path.exists(model_info_path):
-\1    return f"Error: model_info.json not found at {model_info_path}. Check that the dataset path '{dataset_path}' contains valid audio files."
-\1try:
-\1    with open(model_info_path, "r", encoding="utf-8") as f:
-\1        model_info = json.load(f)
-\1except (json.JSONDecodeError, IOError) as e:
-\1    return f"Error: could not read model_info.json: {e}."
-\1total_seconds = model_info.get("total_seconds", 0)
-\1if total_seconds <= 0:
-\1    return f"Error: no audio data was processed (total_seconds={total_seconds}). Check that the dataset path '{dataset_path}' contains valid audio files (WAV, MP3, FLAC, OGG)."
-\1\2"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
+    return content.replace(spec["anchor"], spec["replacement"], 1), "applied", None
 
 
-def patch_run_extract_script(content: str) -> tuple[str, bool]:
-    """
-    Patch run_extract_script to check return code and validate extracted/ directory.
-
-    Args:
-        content: The content of core.py
-
-    Returns:
-        Tuple of (patched_content, success)
-    """
-    # Idempotency marker - must match the comment in injected code
-    idempotency_marker = "# Validate extracted files exist"
-
-    # Re-anchored for upstream 3.6.3 + process_tracking (see preprocess patch above).
-    # Inject ONLY the post-run extracted/ validation before the success return.
-    old_pattern = r'\n([ \t]+)(return f"Model \{model_name\} extracted successfully\.")'
-
-    # Check if already patched by looking for our idempotency marker
-    if idempotency_marker in content:
-        return content, True  # Already patched
-
-    # Check if pattern exists
-    if not re.search(old_pattern, content):
-        print(
-            "[patch_subprocess_validation] extract pattern not found - code may have been modified"
-        )
-        return content, False
-
-    # Replacement code that validates extracted directory.
-    # Note: The idempotency marker "# Validate extracted files exist" must match the check above
-    replacement = r"""
-\1# Validate extracted files exist
-\1extracted_dir = os.path.join(model_path, "extracted")
-\1if not os.path.exists(extracted_dir):
-\1    return f"Error: extracted directory not found at {extracted_dir}. Run preprocessing first to generate audio data for extraction."
-\1# Check that extracted directory is not empty
-\1extracted_files = os.listdir(extracted_dir)
-\1if not extracted_files:
-\1    return f"Error: extracted directory is empty at {extracted_dir}. Preprocessing may have failed - try re-running it."
-\1\2"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
+def verify(original, content, landed):
+    """Return a list of problems; empty means the patched content is complete."""
+    problems = []
+    for spec in landed:
+        marker = spec["marker"]
+        count = content.count(marker)
+        if count != 1:
+            problems.append(
+                f'verification: expected exactly 1 "{marker}", found {count}'
+            )
+    for text in PRESERVED_UPSTREAM:
+        if content.count(text) != original.count(text):
+            problems.append(
+                f'verification: upstream code was altered: "{text.strip()}"'
+            )
+    try:
+        compile(content, "core.py", "exec")
+    except SyntaxError as error:
+        problems.append(f"verification: patched core.py does not compile: {error}")
+    return problems
 
 
-def patch_run_train_script(content: str) -> tuple[str, bool]:
-    """
-    Patch run_train_script to validate preprocessing was done before training.
-
-    Args:
-        content: The content of core.py
-
-    Returns:
-        Tuple of (patched_content, success)
-    """
-    # Idempotency marker - must match the comment in injected code
-    idempotency_marker = "# Validate preprocessing and extraction before training"
-
-    # Pattern to find where pg, pd are set and train_script_path begins
-    # Use \s* for flexible whitespace handling
-    insert_pattern = (
-        r'(pg, pd = "", ""\s*\n\s*\n)(\s*)train_script_path = os\.path\.join'
-    )
-
-    # Check if already patched by looking for our idempotency marker
-    if idempotency_marker in content:
-        return content, True  # Already patched
-
-    # Check if pattern exists
-    if not re.search(insert_pattern, content):
-        print(
-            "[patch_subprocess_validation] train pattern not found - code may have been modified"
-        )
-        return content, False
-
-    # Validation code to insert
-    # Note: The idempotency marker "# Validate preprocessing and extraction before training" must match the check above
-    # Use the captured indentation (\2) to maintain consistent formatting
-    validation_code = r"""\2# Validate preprocessing and extraction before training
-\2model_dir = os.path.join(logs_path, model_name)
-\2model_info_path = os.path.join(model_dir, "model_info.json")
-
-\2if not os.path.exists(model_info_path):
-\2    return f"Error: preprocessing not found. Run preprocessing first for model '{model_name}'."
-
-\2try:
-\2    with open(model_info_path, "r", encoding="utf-8") as f:
-\2        model_info = json.load(f)
-\2except (json.JSONDecodeError, IOError) as e:
-\2    return f"Error: could not read model_info.json: {e}."
-
-\2total_seconds = model_info.get("total_seconds", 0)
-\2if total_seconds <= 0:
-\2    return f"Error: no audio data was preprocessed (total_seconds={total_seconds}). Re-run preprocessing with a valid dataset."
-
-\2extracted_dir = os.path.join(model_dir, "extracted")
-\2if not os.path.exists(extracted_dir):
-\2    return f"Error: feature extraction not found. Run feature extraction first for model '{model_name}'."
-
-\2extracted_files = os.listdir(extracted_dir)
-\2if not extracted_files:
-\2    return f"Error: extracted directory is empty. Re-run feature extraction for model '{model_name}'."
-
-"""
-
-    # Insert validation code between pg, pd assignment and train_script_path
-    # Note: validation_code ends with just a newline, so we add \2 (indentation) before train_script_path
-    replacement = r"\1" + validation_code + r"\2train_script_path = os.path.join"
-
-    new_content = re.sub(insert_pattern, replacement, content)
-    return new_content, True
-
-
-def patch_core_py(base_path: str) -> bool:
-    """
-    Apply all subprocess validation patches to core.py.
-
-    Args:
-        base_path: Path to the source directory containing core.py
-
-    Returns:
-        True if patching succeeded, False otherwise
-    """
+def patch_core_py(base_path: str) -> int:
+    """Apply the sub-patches to core.py; returns the process exit code."""
     core_py_path = os.path.join(base_path, "core.py")
-    backup_path = core_py_path + ".bak"
-
-    if not os.path.exists(core_py_path):
-        print(f"[patch_subprocess_validation] core.py not found at {core_py_path}")
-        return False
-
     try:
         with open(core_py_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"[patch_subprocess_validation] Error reading core.py: {e}")
-        return False
+            original = f.read()
+    except OSError as error:
+        print(f"{TAG} Cannot read {core_py_path}: {error}")
+        return EXIT_FAILED
 
-    original_content = content
-    patches_applied = []
-    patches_skipped = []
-
-    # Apply all patches
-    for patch_func, patch_name in [
-        (patch_run_preprocess_script, "run_preprocess_script"),
-        (patch_run_extract_script, "run_extract_script"),
-        (patch_run_train_script, "run_train_script"),
-    ]:
-        content_before = content
-        content, success = patch_func(content)
-
-        if not success:
-            # Pattern not found (different from already patched)
-            patches_skipped.append(f"{patch_name} (pattern not found)")
-        elif content != content_before:
-            patches_applied.append(patch_name)
-        # If content unchanged and success=True, it was already patched (idempotent)
-
-    # Check if any changes were made
-    if content == original_content:
-        if patches_skipped:
-            print(
-                f"[patch_subprocess_validation] No changes made. Skipped: {', '.join(patches_skipped)}"
-            )
+    content = original
+    landed = []
+    applied_now = []
+    report = []
+    failures = []
+    for spec in SUB_PATCHES:
+        kind = "required" if spec["required"] else "optional"
+        content, status, reason = apply_sub_patch(content, spec)
+        if status == "missing":
+            if spec["required"]:
+                failures.append(f"{spec['name']} ({kind}): {reason}")
+            else:
+                report.append(f"{spec['name']} ({kind}): skipped - {reason}")
         else:
-            print(
-                "[patch_subprocess_validation] No changes needed - all patches already applied"
-            )
-        return True
+            landed.append(spec)
+            report.append(f"{spec['name']} ({kind}): {status}")
+            if status == "applied":
+                applied_now.append(spec["name"])
 
-    # Create backup before modifying
-    try:
-        shutil.copy2(core_py_path, backup_path)
-        print(f"[patch_subprocess_validation] Created backup at {backup_path}")
-    except Exception as e:
-        print(f"[patch_subprocess_validation] Warning: Could not create backup: {e}")
-        # Continue anyway - backup failure shouldn't block patching
+    if not failures:
+        failures = verify(original, content, landed)
+    if failures:
+        for failure in failures:
+            print(f"{TAG} FAILED - {failure}")
+        print(f"{TAG} core.py left unchanged")
+        return EXIT_FAILED
+
+    for line in report:
+        print(f"{TAG} {line}")
+
+    if content == original:
+        print(f"{TAG} Already applied, no changes")
+        return EXIT_OK
 
     try:
         with open(core_py_path, "w", encoding="utf-8") as f:
             f.write(content)
-    except Exception as e:
-        print(f"[patch_subprocess_validation] Error writing core.py: {e}")
-        # Attempt to restore from backup
-        if os.path.exists(backup_path):
-            try:
-                shutil.copy2(backup_path, core_py_path)
-                print(f"[patch_subprocess_validation] Restored from backup")
-            except Exception as restore_err:
-                print(
-                    f"[patch_subprocess_validation] Error restoring from backup: {restore_err}"
-                )
-        return False
+    except OSError as error:
+        print(f"{TAG} Error writing core.py: {error}")
+        try:
+            with open(core_py_path, "w", encoding="utf-8") as f:
+                f.write(original)
+            print(f"{TAG} Restored original core.py")
+        except OSError as restore_error:
+            print(f"{TAG} Could not restore original core.py: {restore_error}")
+        return EXIT_FAILED
 
-    print(
-        f"[patch_subprocess_validation] Patched core.py: {', '.join(patches_applied)}"
-    )
-    return True
+    print(f"{TAG} Patched core.py: {', '.join(applied_now)}")
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    import sys
-
-    base_path = sys.argv[1] if len(sys.argv) > 1 else "."
-    success = patch_core_py(base_path)
-    sys.exit(0 if success else 2)
+    sys.exit(patch_core_py(sys.argv[1] if len(sys.argv) > 1 else "."))

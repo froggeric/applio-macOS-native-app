@@ -19,7 +19,8 @@ This patch:
    upstream calls verbatim (the fork no longer injects _infer_toast - that
    would duplicate every announcement). Only the concurrent-run raise toast
    is fork-added: it sits BEFORE the body's try, so upstream's except-handler
-   can never cover it.
+   can never cover it. Upstream 3.7 turned the module-level _toast into a
+   plain print, so step (0) below bridges that helper back onto gradio toasts.
 3. Removes the broken infer_pid.txt logic (frozen-CWD write was wrong; and in
    single-process os.getpid() == the whole app, so PID-kill quit the app).
 4. (a11y phase 4b) Wraps VoiceConverter.convert_audio's body in a try/except so
@@ -209,15 +210,47 @@ def _infer_single_end(ctx, error=None):
 
 
 # Anchor regex: spans the method BODY only (the def + docstring are preserved).
-# Bookends = the pristine pid-file open/remove pair; the MIDDLE pin
+# Bookends = the pristine pid-file open and upstream's whole finally block
+# (model cleanup + guarded pid-file removal, upstream 3.7); the MIDDLE pin
 # (_toast start call) verifies the post-#1275 shape, so a future upstream
 # rewrite of the toast text misses here (exit 2) instead of silently
 # replacing newer upstream code with this stale replacement.
 INFER_BATCH_ANCHOR = re.compile(
     r"        pid = os\.getpid\(\)\n        try:.*?"
     r'_toast\(f"Batch conversion started: \{total\} files"\)\n.*?'
-    r'os\.remove\(os\.path\.join\(now_dir, "assets", "infer_pid\.txt"\)\)\n',
+    r"        finally:\n"
+    r"            self\.cleanup_model\(\)\n"
+    r'            pid_path = os\.path\.join\(now_dir, "assets", "infer_pid\.txt"\)\n'
+    r"            if os\.path\.exists\(pid_path\):\n"
+    r"                try:\n"
+    r"                    os\.remove\(pid_path\)\n"
+    r"                except Exception:\n"
+    r"                    pass\n",
     re.DOTALL,
+)
+
+# Upstream 3.7 turned _toast into a plain print ("the web UI streams engine
+# logs"): the batch start / milestone / terminal / failure announcements no
+# longer reach the UI as toasts. The fork keeps them as toasts (its announced
+# feedback for every user, and the toast layer of its accessibility design) by
+# bridging the same helper onto gradio's toast calls. Lazy import + guard: the
+# engine must keep working where gradio has no request context (CLI, tests).
+INFER_TOAST_ANCHOR = (
+    "def _toast(message, warning=False):\n"
+    '    """Status message helper (prints to stdout; the web UI streams engine logs)."""\n'
+    "    print(message)\n"
+)
+_TOAST_MARKER = "(gr.Warning if warning else gr.Info)(message)"
+INFER_TOAST_BRIDGE = (
+    "def _toast(message, warning=False):\n"
+    '    """Status message helper: engine log line and UI toast (fork bridge)."""\n'
+    "    print(message)\n"
+    "    try:\n"
+    "        import gradio as gr\n"
+    "\n"
+    "        (gr.Warning if warning else gr.Info)(message)\n"
+    "    except Exception:\n"
+    "        pass\n"
 )
 
 
@@ -376,6 +409,7 @@ INFER_BATCH_REPLACEMENT = r"""        # Inference progress tracking (fork): coop
             _toast(f"Batch conversion failed: {_infer_exc}", warning=True)
             raise
         finally:
+            self.cleanup_model()
             # Always remove the cancel flag (a post-completion Stop click is a no-op;
             # a fresh batch is not cancelled by a leftover flag - the start-clear above
             # also covers this, but finally makes it robust even if start-clear raced).
@@ -395,12 +429,13 @@ INFER_BATCH_REPLACEMENT = r"""        # Inference progress tracking (fork): coop
 # edits between the endpoints survive the patch. Both endpoints are unique to
 # convert_audio file-wide (the batch opens with `pid = os.getpid()` and its
 # timing lines use `_infer_time`/different indentation after step (b)).
+INFER_SINGLE_HEAD = (
+    "        self.get_vc(model_path, sid, inference_engine, onnx_precision)\n" "\n"
+)
 INFER_SINGLE_ANCHOR = re.compile(
-    r"        self\.get_vc\(model_path, sid\)\n"
-    r"\n"
-    r"        start_time = time\.time\(\)\n"
-    r"(.*?)"
-    r"        elapsed_time = time\.time\(\) - start_time\n",
+    re.escape(INFER_SINGLE_HEAD)
+    + r"        start_time = time\.time\(\)\n(.*?)"
+    + r"        elapsed_time = time\.time\(\) - start_time\n",
     re.DOTALL,
 )
 
@@ -418,9 +453,7 @@ def _infer_single_wrap(m):
         for ln in m.group(1).splitlines(keepends=True)
     )
     return (
-        "        self.get_vc(model_path, sid)\n"
-        "\n"
-        "        _infer_single_ctx = _infer_single_begin(\n"
+        INFER_SINGLE_HEAD + "        _infer_single_ctx = _infer_single_begin(\n"
         "            model_path, audio_input_path, audio_output_path\n"
         "        )\n"
         "        start_time = time.time()\n"
@@ -463,11 +496,25 @@ def patch_infer_py(base_path: str) -> bool:
     helpers_done = _HELPERS_MARKER in content and "def _infer_single_begin(" in content
     batch_done = _BATCH_MARKER in content
     single_done = _SINGLE_MARKER in content
-    if helpers_done and batch_done and single_done:
+    if helpers_done and batch_done and single_done and _TOAST_MARKER in content:
         print("[infer.py inference-progress] Already patched, skipping.")
         return True
 
     changed = False
+
+    # (0) Bridge upstream's print-only _toast onto gradio toasts (see
+    # INFER_TOAST_BRIDGE). Required: a missed anchor means upstream reworked
+    # the helper, and the announcements would silently stop reaching the UI.
+    toast_done = _TOAST_MARKER in content
+    if not toast_done:
+        if content.count(INFER_TOAST_ANCHOR) != 1:
+            print(
+                "[infer.py inference-progress] Could not find upstream's _toast helper "
+                f"(found {content.count(INFER_TOAST_ANCHOR)}, expected 1)"
+            )
+            return False
+        content = content.replace(INFER_TOAST_ANCHOR, INFER_TOAST_BRIDGE, 1)
+        changed = True
 
     # (a) Inject helpers before `class VoiceConverter` (unique + stable anchor).
     if not helpers_done:

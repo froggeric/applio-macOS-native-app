@@ -2,21 +2,50 @@
 """
 Patcher to add process tracking to core.py subprocess calls.
 
-This patcher transforms subprocess.run() calls to subprocess.Popen() and
-registers process PIDs in ~/.applio/active_processes.json for tracking.
+Upstream 3.7.2 launches every worker with `result = run_quiet(<command>)` and then
+checks `result.returncode` itself (and `result.stderr` for TTS). This patcher replaces
+each tracked launch line with `_applio_tracked_run(...)`, a drop-in that returns a
+`subprocess.CompletedProcess`, so upstream's handling after the call is left untouched,
+and records the child's PID in active_processes.json for the launcher's Progress
+Monitor (pause / resume / terminate, log tailing, process history).
+
+Tracked call sites, all required:
+  - run_preprocess_script  -> "preprocess"  log: <logs>/<model>/preprocess.log
+  - run_extract_script     -> "extract"     log: <logs>/<model>/extract.log
+  - run_train_script       -> "training"    log: <logs>/<model>/training.log
+  - run_tts_script         -> "tts"         stdout/stderr captured, as upstream does
+
+run_index_script is left on upstream's run_quiet(): the index step was never tracked
+(the launcher has no "index" process type) and upstream now checks its return code.
+
+Tracked children that get a log file do not inherit APPLIO_TERMINAL_LOG. Upstream's
+worker scripts call capture_worker_output() (rvc/lib/terminal.py), which re-points
+their stdout/stderr at the UI session log when that variable is set, bypassing the
+per-process log file the launcher tails. The per-process log is forwarded to that
+session log instead, so upstream's Terminal tab still shows the worker's output.
+
+Exit codes: 0 = applied or already applied; 2 = a required anchor was not found or the
+patched file failed verification (nothing is written then).
 
 Applied at build time by build_macos.py.
 """
 
 import os
 import re
-import shutil
+import sys
 
-# Process tracking helper code to inject
-PROCESS_TRACKER_IMPORT = '''
-# === Process Tracking (injected by patch) ===
+EXIT_OK = 0
+EXIT_FAILED = 2
+
+TAG = "[patch_process_tracking]"
+
+# Helper functions injected before `def run_quiet(` in core.py.
+# `datetime` is imported under an alias on purpose: core.py does
+# `from datetime import datetime, timedelta`, so a bare `import datetime` here would
+# rebind the name to the module and break every later `datetime.now()` in core.py.
+PROCESS_TRACKER_HELPERS = '''# === Process Tracking (injected by patch) ===
 import json
-import datetime as _applio_dt
+import datetime as _applio_datetime
 import fcntl
 import time as _time_module
 import threading
@@ -97,10 +126,10 @@ def _verify_process_identity(pid, expected_start_time=None):
         proc = psutil.Process(pid)
         if expected_start_time:
             if isinstance(expected_start_time, str):
-                expected = _applio_dt.datetime.fromisoformat(expected_start_time)
+                expected = _applio_datetime.datetime.fromisoformat(expected_start_time)
             else:
                 expected = expected_start_time
-            actual = _applio_dt.datetime.fromtimestamp(proc.create_time())
+            actual = _applio_datetime.datetime.fromtimestamp(proc.create_time())
             delta = abs((actual - expected).total_seconds())
             if delta > 2.0:
                 return False
@@ -112,7 +141,7 @@ def _track_process(process_type, pid, **metadata):
     state = _read_process_state()
     state["processes"][process_type] = {
         "pid": pid,
-        "started_at": _applio_dt.datetime.now().isoformat(),
+        "started_at": _applio_datetime.datetime.now().isoformat(),
         "status": "running",
         **metadata
     }
@@ -135,6 +164,7 @@ _HISTORY_MAX_ENTRIES = 50
 # Cap on plotted epoch points in a history snapshot (matches the live path's
 # MAX_EPOCH_POINTS in applio_launcher). A real run evaluates far fewer.
 _SNAPSHOT_MAX_POINTS = 2000
+
 
 def _get_history_file_path():
     """Get path to process_history.json."""
@@ -179,11 +209,11 @@ def _add_to_history(entry):
         if not entry.get(field):
             print(f"[ProcessTracking] Warning: Missing required field '{field}' in history entry")
             return
-    
+
     with _history_thread_lock:
         history = _read_process_history()
         # Generate unique process ID
-        process_id = f"{entry.get('type', 'unknown')}-{entry.get('started_at', _applio_dt.datetime.now().isoformat())}"
+        process_id = f"{entry.get('type', 'unknown')}-{entry.get('started_at', _applio_datetime.datetime.now().isoformat())}"
         entry["process_id"] = process_id
         # Add to front of list
         history["history"].insert(0, entry)
@@ -272,392 +302,364 @@ def _snapshot_training_metrics(log_file_path, prior_points=None):
     }
 
 # === End Process History Tracking ===
+
+# === End Process History Tracking ===
+
+def _applio_child_env():
+    """Child environment without APPLIO_TERMINAL_LOG.
+
+    Upstream's worker scripts call capture_worker_output(), which re-points their
+    stdout/stderr at the UI session log when that variable is set. The launcher tails
+    our per-process log file instead, so the variable must not reach the child.
+    """
+    env = os.environ.copy()
+    env.pop("APPLIO_TERMINAL_LOG", None)
+    return env
+
+def _applio_tee_to_session_log(log_path):
+    """Forward a per-process log into upstream's terminal session log, if there is one.
+
+    Tracked workers do not get APPLIO_TERMINAL_LOG (see _applio_child_env()), so
+    upstream's Terminal tab would not show their output. This copies it there
+    while the launcher keeps tailing the per-process file. Returns a function
+    that stops the forwarding after one final copy, or None when there is no
+    session log.
+    """
+    session_log = os.environ.get("APPLIO_TERMINAL_LOG")
+    if not session_log:
+        return None
+    stop = threading.Event()
+    done = threading.Event()
+
+    def copy_out(position):
+        data = b""
+        try:
+            with open(log_path, "rb") as source:
+                source.seek(position)
+                data = source.read()
+            if data:
+                with open(session_log, "ab") as target:
+                    target.write(data)
+        except OSError:
+            pass
+        return position + len(data)
+
+    def run():
+        position = 0
+        while True:
+            position = copy_out(position)
+            if stop.is_set():
+                break
+            stop.wait(0.25)
+        copy_out(position)
+        done.set()
+
+    def stop_copying():
+        stop.set()
+        done.wait(2)  # returns once the last copy is written (2 s at most)
+
+    threading.Thread(target=run, name="applio-log-tee", daemon=True).start()
+    return stop_copying
+
+def _applio_tracked_run(process_type, command, model_name=None, log_file=None,
+                        capture_output=False, text=False, **metadata):
+    """Run one child in place of run_quiet() and report it to the Progress Monitor.
+
+    Returns subprocess.CompletedProcess, so callers keep using result.returncode,
+    result.stdout and result.stderr exactly as with subprocess.run().
+    """
+    started_at = _applio_datetime.datetime.now().isoformat()
+    log_path = None
+    log_handle = None
+    stop_tee = None
+    prior_points = None
+    popen_kwargs = {}
+    track_metadata = dict(metadata)
+    if capture_output:
+        popen_kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text)
+    elif log_file:
+        log_dir = os.path.join(logs_path, model_name or "")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, log_file)
+        if process_type == "training" and os.path.exists(log_path):
+            # Capture this model's existing epoch curve BEFORE truncating the log
+            # below. A resumed run reopens training.log with "w", wiping every
+            # pre-resume epoch; handing those points to _snapshot_training_metrics
+            # lets it merge the full lineage back together.
+            try:
+                _prior_snap = _snapshot_training_metrics(log_path)
+                prior_points = _prior_snap["epoch_points"] if _prior_snap else None
+            except Exception:
+                prior_points = None
+        log_handle = open(log_path, "w")
+        stop_tee = _applio_tee_to_session_log(log_path)
+        track_metadata["log_file"] = log_path
+        popen_kwargs.update(
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=_applio_child_env(),
+        )
+    if model_name is not None:
+        track_metadata["model_name"] = model_name
+
+    proc = None
+    stdout = stderr = None
+    try:
+        proc = subprocess.Popen(command, **popen_kwargs)
+        _track_process(process_type, proc.pid, **track_metadata)
+        if capture_output:
+            stdout, stderr = proc.communicate()
+        else:
+            proc.wait()
+    finally:
+        if stop_tee is not None:
+            stop_tee()  # copies what is left, then ends the forwarding thread
+        if log_handle is not None:
+            log_handle.close()
+        # Add to history BEFORE untracking: once the key leaves
+        # active_processes.json the terminal word must already be in
+        # process_history.json (untrack-then-write raced heartbeat readers).
+        try:
+            history = {
+                "type": process_type,
+                "model_name": (
+                    model_name if model_name is not None else process_type.upper()
+                ),
+                "started_at": started_at,
+                "completed_at": _applio_datetime.datetime.now().isoformat(),
+                "status": (
+                    "completed" if proc is not None and proc.returncode == 0 else "failed"
+                ),
+            }
+            if log_path:
+                history["log_path"] = log_path
+            if "total_epoch" in metadata:
+                history["total_epoch"] = metadata["total_epoch"]
+            if process_type == "training" and log_path:
+                # Snapshot final metrics so they survive a retrain overwriting
+                # training.log. The snapshot opens the log itself, so it runs
+                # after the handle is closed. The pre-truncation points make a
+                # resumed run's curve span its whole lineage.
+                try:
+                    _snapshot = _snapshot_training_metrics(log_path, prior_points)
+                except Exception:
+                    _snapshot = None
+                if _snapshot:
+                    history["best_epoch"] = _snapshot["best_epoch"]
+                    history["best_loss"] = _snapshot["best_loss"]
+                    history["final_epoch"] = _snapshot["final_epoch"]
+                    history["epoch_points"] = _snapshot["epoch_points"]
+            _add_to_history(history)
+        except Exception:
+            pass
+        try:
+            _untrack_process(process_type)
+        except Exception:
+            pass
+
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
 # === End Process Tracking ===
+
 
 '''
 
-# Idempotency marker
-IDEMPOTENCY_MARKER = "# === Process Tracking (injected by patch) ==="
+HELPERS_MARKER = "# === Process Tracking (injected by patch) ==="
+HELPERS_ANCHOR = "def run_quiet(command, **kwargs):\n"
+TRACKED_RUN_DEF = "def _applio_tracked_run("
+CHILD_ENV_MARKER = 'env.pop("APPLIO_TERMINAL_LOG", None)'
+TEE_DEF = "def _applio_tee_to_session_log("
+TEE_USE = "stop_tee = _applio_tee_to_session_log(log_path)"
+
+# One entry per tracked launch: (function, anchor, replacement for its first line,
+# marker once applied).
+#
+# `anchor` is upstream's exact text: the run_quiet call plus the start of upstream's
+# own return-code handling. The tail matters: three launch lines are textually
+# identical (`result = run_quiet(command)`), and run_index_script's copy must stay
+# untouched. Only the first line is replaced, the tail is kept verbatim.
+CALL_SITES = [
+    (
+        "run_preprocess_script",
+        "    result = run_quiet(command)\n"
+        "    if result.returncode != 0:\n"
+        '        return f"Preprocessing failed for model {model_name}.',
+        '    result = _applio_tracked_run("preprocess", command, model_name, "preprocess.log")\n',
+        '_applio_tracked_run("preprocess",',
+    ),
+    (
+        "run_extract_script",
+        "    result = run_quiet(command_1)\n"
+        "    if result.returncode != 0:\n"
+        '        return f"Feature extraction failed for model {model_name}.',
+        '    result = _applio_tracked_run("extract", command_1, model_name, "extract.log")\n',
+        '_applio_tracked_run("extract",',
+    ),
+    (
+        "run_train_script",
+        "    result = run_quiet(command)\n"
+        "    if result.returncode != 0:\n"
+        '        return f"Training failed for model {model_name}.',
+        "    result = _applio_tracked_run("
+        '"training", command, model_name, "training.log", total_epoch=total_epoch)\n',
+        '_applio_tracked_run("training",',
+    ),
+    (
+        "run_tts_script",
+        "    result = run_quiet(cmd, capture_output=True, text=True)\n"
+        "    if result.returncode != 0:\n"
+        "        err_msg = result.stderr.strip()\n",
+        '    result = _applio_tracked_run("tts", cmd, capture_output=True, text=True)\n',
+        '_applio_tracked_run("tts",',
+    ),
+]
+
+# Upstream code that must survive the patch untouched (exact text, counted before and
+# after): the return-code checks, TTS stderr handling, the untracked index launch and
+# the shutdown branch that follows the training run.
+PRESERVED_UPSTREAM = [
+    "if result.returncode != 0:",
+    "        err_msg = result.stderr.strip()",
+    "    result = run_quiet(command)\n"
+    "    if result.returncode != 0:\n"
+    '        return f"Index generation failed for model {model_name}.',
+    "    run_index_script(model_name, index_algorithm)\n\n    if shutdown_check:",
+]
+
+BARE_DATETIME_IMPORT = re.compile(r"^import datetime\s*$", re.MULTILINE)
 
 
-def patch_run_preprocess_script(content: str) -> tuple[str, bool]:
+def apply_call_site(content, name, anchor, new_first_line, marker):
+    """Replace one launch line.
+
+    Returns (content, status, reason) with status "applied", "already" or "missing".
     """
-    Patch run_preprocess_script to track subprocess and redirect output to log file.
-
-    Line 448: subprocess.run(command)
-    """
-    # Specific idempotency check: has this specific patch been applied?
-    if '_track_process("preprocess"' in content:
-        return content, True  # Already patched
-
-    # Pattern: result = subprocess.run(command) + upstream error check + final return
-    # (upstream 3.6.3 added `result = ` assignment and an `if result.returncode` block)
-    old_pattern = r'\n+([ \t]+)result = subprocess\.run\(command\)\n\s+if result\.returncode != 0:\n\s+return f"Preprocessing failed for model \{model_name\}\. Please check the console logs for more details\."\n\n\s+return f"Model \{model_name\} preprocessed successfully\."\n'
-
-    if not re.search(old_pattern, content):
-        print("[patch_process_tracking] preprocess pattern not found")
-        return content, False
-
-    replacement = r"""
-\1# Track preprocess process with log redirection
-\1_log_dir = os.path.join(logs_path, model_name)
-\1os.makedirs(_log_dir, exist_ok=True)
-\1_log_file_path = os.path.join(_log_dir, "preprocess.log")
-\1_log_file = open(_log_file_path, "w")
-\1_started_at = _applio_dt.datetime.now().isoformat()
-\1try:
-\1    _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-\1    _track_process("preprocess", _proc.pid, model_name=model_name, log_file=_log_file_path)
-\1    _proc.wait()
-\1finally:
-\1    _log_file.close()
-\1    # Add to history BEFORE untracking: once the key leaves
-\1    # active_processes.json the terminal word must already be in
-\1    # process_history.json (untrack-then-write raced heartbeat readers).
-\1    try:
-\1        _add_to_history({
-\1            "type": "preprocess",
-\1            "model_name": model_name,
-\1            "started_at": _started_at,
-\1            "completed_at": _applio_dt.datetime.now().isoformat(),
-\1            "status": (
-\1                "completed"
-\1                if "_proc" in locals()
-\1                and _proc.returncode == 0
-\1                else "failed"
-\1            ),
-\1            "log_path": _log_file_path
-\1        })
-\1    except Exception:
-\1        pass
-\1    try:
-\1        _untrack_process("preprocess")
-\1    except Exception:
-\1        pass
-\1if _proc.returncode != 0:
-\1    return f"Error: Preprocessing failed with code {_proc.returncode}"
-
-\1return f"Model {model_name} preprocessed successfully."
-"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
+    if marker in content:
+        return content, "already", None
+    old_first_line = anchor.split("\n", 1)[0] + "\n"
+    count = content.count(anchor)
+    if count != 1:
+        return (
+            content,
+            "missing",
+            (
+                f"expected exactly 1 match of the `{old_first_line.strip()}` launch line "
+                f"followed by upstream's return-code check, found {count}"
+            ),
+        )
+    replacement = new_first_line + anchor[len(old_first_line) :]
+    return content.replace(anchor, replacement, 1), "applied", None
 
 
-def patch_run_extract_script(content: str) -> tuple[str, bool]:
-    """
-    Patch run_extract_script to track subprocess and redirect output to log file.
+def verify(original, content):
+    """Return a list of problems; empty means the patched content is complete."""
+    problems = []
 
-    Line 485: subprocess.run(command_1)
-    """
-    # Specific idempotency check: has this specific patch been applied?
-    if '_track_process("extract"' in content:
-        return content, True
+    required_markers = [
+        HELPERS_MARKER,
+        TRACKED_RUN_DEF,
+        CHILD_ENV_MARKER,
+        TEE_DEF,
+        TEE_USE,
+    ] + [marker for _, _, _, marker in CALL_SITES]
+    for marker in required_markers:
+        count = content.count(marker)
+        if count != 1:
+            problems.append(
+                f'verification: expected exactly 1 "{marker}", found {count}'
+            )
 
-    # Pattern: result = subprocess.run(command_1) + upstream error check + final return
-    old_pattern = r'\n+([ \t]+)result = subprocess\.run\(command_1\)\n\s+if result\.returncode != 0:\n\s+return f"Feature extraction failed for model \{model_name\}\. Please check the console logs for more details\."\n\n\s+return f"Model \{model_name\} extracted successfully\."\n'
+    for text in PRESERVED_UPSTREAM:
+        if content.count(text) != original.count(text):
+            problems.append(
+                f'verification: upstream code was altered: "{text.splitlines()[0].strip()}"'
+            )
 
-    if not re.search(old_pattern, content):
-        print("[patch_process_tracking] extract pattern not found")
-        return content, False
+    if BARE_DATETIME_IMPORT.search(content):
+        problems.append(
+            "verification: a bare `import datetime` would shadow core.py's "
+            "`from datetime import datetime`"
+        )
 
-    replacement = r"""
-\1# Track extract process with log redirection
-\1_log_dir = os.path.join(logs_path, model_name)
-\1os.makedirs(_log_dir, exist_ok=True)
-\1_log_file_path = os.path.join(_log_dir, "extract.log")
-\1_log_file = open(_log_file_path, "w")
-\1_started_at = _applio_dt.datetime.now().isoformat()
-\1try:
-\1    _proc = subprocess.Popen(command_1, stdout=_log_file, stderr=subprocess.STDOUT)
-\1    _track_process("extract", _proc.pid, model_name=model_name, log_file=_log_file_path)
-\1    _proc.wait()
-\1finally:
-\1    _log_file.close()
-\1    # Add to history BEFORE untracking (see preprocess note).
-\1    try:
-\1        _add_to_history({
-\1            "type": "extract",
-\1            "model_name": model_name,
-\1            "started_at": _started_at,
-\1            "completed_at": _applio_dt.datetime.now().isoformat(),
-\1            "status": (
-\1                "completed"
-\1                if "_proc" in locals()
-\1                and _proc.returncode == 0
-\1                else "failed"
-\1            ),
-\1            "log_path": _log_file_path
-\1        })
-\1    except Exception:
-\1        pass
-\1    try:
-\1        _untrack_process("extract")
-\1    except Exception:
-\1        pass
-\1if _proc.returncode != 0:
-\1    return f"Error: Feature extraction failed with code {_proc.returncode}"
+    try:
+        compile(content, "core.py", "exec")
+    except SyntaxError as error:
+        problems.append(f"verification: patched core.py does not compile: {error}")
 
-\1return f"Model {model_name} extracted successfully."
-"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
+    return problems
 
 
-def patch_run_train_script(content: str) -> tuple[str, bool]:
-    """
-    Patch run_train_script to track subprocess and redirect output to log file.
-
-    Line 553: subprocess.run(command)
-    """
-    # Specific idempotency check: has this specific patch been applied?
-    if '_track_process("training"' in content:
-        return content, True
-
-    # Pattern: result = subprocess.run(command) + upstream error check + run_index_script call
-    old_pattern = r'\n+([ \t]+)result = subprocess\.run\(command\)\n\s+if result\.returncode != 0:\n\s+return f"Training failed for model \{model_name\}\. Please check the console logs for more details\."\n\n\s+run_index_script\(model_name, index_algorithm\)\n'
-
-    if not re.search(old_pattern, content):
-        print("[patch_process_tracking] train pattern not found")
-        return content, False
-
-    replacement = r"""
-\1# Track training process with log redirection
-\1_log_dir = os.path.join(logs_path, model_name)
-\1os.makedirs(_log_dir, exist_ok=True)
-\1_log_file_path = os.path.join(_log_dir, "training.log")
-\1# Capture this model's existing epoch curve BEFORE truncating the log below.
-\1# A resumed run reopens training.log with "w", wiping every pre-resume epoch;
-\1# handing those points to _snapshot_training_metrics lets it merge the full
-\1# lineage back together so the loss graph isn't just the resumed tail.
-\1_prior_points = []
-\1if os.path.exists(_log_file_path):
-\1    _prior_snap = _snapshot_training_metrics(_log_file_path)
-\1    if _prior_snap:
-\1        _prior_points = _prior_snap["epoch_points"]
-\1_log_file = open(_log_file_path, "w")
-\1_started_at = _applio_dt.datetime.now().isoformat()
-\1try:
-\1    _proc = subprocess.Popen(command, stdout=_log_file, stderr=subprocess.STDOUT)
-\1    _track_process("training", _proc.pid, model_name=model_name, total_epoch=total_epoch, log_file=_log_file_path)
-\1    _proc.wait()
-\1finally:
-\1    _log_file.close()
-\1    # Add to history BEFORE untracking (see preprocess note). The snapshot
-\1    # opens training.log itself, so it runs after _log_file.close().
-\1    try:
-\1        # Snapshot final metrics so they survive a retrain overwriting training.log.
-\1        # Pass the pre-truncation points so a resumed run's curve spans its lineage.
-\1        _snapshot = _snapshot_training_metrics(_log_file_path, _prior_points)
-\1    except Exception:
-\1        _snapshot = None
-\1    try:
-\1        _history_entry = {
-\1            "type": "training",
-\1            "model_name": model_name,
-\1            "started_at": _started_at,
-\1            "completed_at": _applio_dt.datetime.now().isoformat(),
-\1            "status": (
-\1                "completed"
-\1                if "_proc" in locals()
-\1                and _proc.returncode == 0
-\1                else "failed"
-\1            ),
-\1            "log_path": _log_file_path,
-\1            "total_epoch": total_epoch
-\1        }
-\1        if _snapshot:
-\1            _history_entry["best_epoch"] = _snapshot["best_epoch"]
-\1            _history_entry["best_loss"] = _snapshot["best_loss"]
-\1            _history_entry["final_epoch"] = _snapshot["final_epoch"]
-\1            _history_entry["epoch_points"] = _snapshot["epoch_points"]
-\1        _add_to_history(_history_entry)
-\1    except Exception:
-\1        pass
-\1    try:
-\1        _untrack_process("training")
-\1    except Exception:
-\1        pass
-\1if _proc.returncode != 0:
-\1    return f"Error: Training failed with code {_proc.returncode}"
-
-\1run_index_script(model_name, index_algorithm)
-"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
-
-
-def patch_run_index_script(content: str) -> tuple[str, bool]:
-    """
-    Patch run_index_script to track subprocess.
-
-    Line 568: subprocess.run(command)
-    """
-    # Specific idempotency check: has this specific patch been applied?
-    # Note: index script doesn't track processes (short-running, optional)
-    # We check for the injected tracking comment instead (stable across message wording)
-    if "# Track index process (short-running, optional)" in content:
-        return content, True
-
-    # Pattern: result = subprocess.run(command) + upstream error check + final return
-    old_pattern = r'\n+([ \t]+)result = subprocess\.run\(command\)\n\s+if result\.returncode != 0:\n\s+return f"Index generation failed for model \{model_name\}\. Make sure you have enough GPU available to generate the Index file\. Please check the console logs for more details\."\n\n\s+return f"Index file for \{model_name\} generated successfully\."\n'
-
-    if not re.search(old_pattern, content):
-        print("[patch_process_tracking] index pattern not found")
-        return content, False
-
-    replacement = r"""
-\1# Track index process (short-running, optional)
-\1_proc = subprocess.Popen(command)
-\1_proc.wait()
-\1if _proc.returncode != 0:
-\1    return f"Index generation failed for model {model_name}. Make sure you have enough GPU available to generate the Index file. Please check the console logs for more details."
-
-\1return f"Index file for {model_name} generated successfully."
-"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
-
-
-def patch_voice_conversion(content: str) -> tuple[str, bool]:
-    """
-    Patch voice_conversion to track TTS subprocess.
-
-    Line 368: subprocess.run(command_tts)
-    """
-    # Specific idempotency check: has this specific patch been applied?
-    if '_track_process("tts"' in content:
-        return content, True
-
-    # This one is trickier - it runs TTS then does inference.
-    # Upstream 3.6.3 captures output and raises RuntimeError(result.stderr),
-    # so the tracked Popen must capture stderr too (via communicate()).
-    old_pattern = r"\n+([ \t]+)result = subprocess\.run\(command_tts, capture_output=True, text=True\)\n\s+if result\.returncode != 0:\n\s+raise RuntimeError\(result\.stderr\.strip\(\)\)\n\s+infer_pipeline = import_voice_converter\(\)"
-
-    if not re.search(old_pattern, content):
-        print("[patch_process_tracking] voice_conversion pattern not found")
-        return content, False
-
-    replacement = r"""
-\1# Track TTS process
-\1_started_at = _applio_dt.datetime.now().isoformat()
-\1try:
-\1    _proc = subprocess.Popen(command_tts, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-\1    _track_process("tts", _proc.pid)
-\1    _stdout, _stderr = _proc.communicate()
-\1finally:
-\1    # Add to history BEFORE untracking (see preprocess note).
-\1    try:
-\1        _add_to_history({
-\1            "type": "tts",
-\1            "model_name": "TTS",
-\1            "started_at": _started_at,
-\1            "completed_at": _applio_dt.datetime.now().isoformat(),
-\1            "status": (
-\1                "completed"
-\1                if "_proc" in locals()
-\1                and _proc.returncode == 0
-\1                else "failed"
-\1            )
-\1        })
-\1    except Exception:
-\1        pass
-\1    try:
-\1        _untrack_process("tts")
-\1    except Exception:
-\1        pass
-\1if _proc.returncode != 0:
-\1    raise RuntimeError(_stderr.strip())
-\1infer_pipeline = import_voice_converter()"""
-
-    new_content = re.sub(old_pattern, replacement, content)
-    return new_content, True
-
-
-def inject_process_tracker_helpers(content: str) -> str:
-    """Inject the process tracking helper functions after imports."""
-    if IDEMPOTENCY_MARKER in content:
-        return content  # Already injected
-
-    # Find a good insertion point - after the imports, before first function
-    # Look for the first function definition
-    match = re.search(r"\n\ndef ", content)
-    if match:
-        insert_pos = match.start()
-        content = content[:insert_pos] + PROCESS_TRACKER_IMPORT + content[insert_pos:]
-
-    return content
-
-
-def patch_core_py(base_path: str) -> bool:
-    """Apply all process tracking patches to core.py."""
+def patch_core_py(base_path: str) -> int:
+    """Apply process tracking to core.py; returns the process exit code."""
     core_py_path = os.path.join(base_path, "core.py")
-    backup_path = core_py_path + ".bak"
-
-    if not os.path.exists(core_py_path):
-        print(f"[patch_process_tracking] core.py not found at {core_py_path}")
-        return False
-
     try:
         with open(core_py_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"[patch_process_tracking] Error reading core.py: {e}")
-        return False
+            original = f.read()
+    except OSError as error:
+        print(f"{TAG} Cannot read {core_py_path}: {error}")
+        return EXIT_FAILED
 
-    original_content = content
-    patches_applied = []
+    content = original
+    failures = []
+    statuses = []
 
-    # Inject helper functions first
-    content = inject_process_tracker_helpers(content)
+    if HELPERS_MARKER in content and TRACKED_RUN_DEF not in content:
+        failures.append(
+            "helper functions: core.py already carries a helper block without "
+            f"`{TRACKED_RUN_DEF[:-1]}` (older patcher version); start from a pristine core.py"
+        )
+    elif HELPERS_MARKER in content:
+        statuses.append(("helper functions", "already applied"))
+    elif content.count(HELPERS_ANCHOR) != 1:
+        failures.append(
+            f"helper functions: expected exactly 1 `def run_quiet(command, **kwargs):` "
+            f"definition, found {content.count(HELPERS_ANCHOR)}"
+        )
+    else:
+        content = content.replace(
+            HELPERS_ANCHOR, PROCESS_TRACKER_HELPERS + HELPERS_ANCHOR, 1
+        )
+        statuses.append(("helper functions", "applied"))
 
-    # Apply all patches
-    for patch_func, patch_name in [
-        (patch_run_preprocess_script, "run_preprocess_script"),
-        (patch_run_extract_script, "run_extract_script"),
-        (patch_run_train_script, "run_train_script"),
-        (patch_run_index_script, "run_index_script"),
-        (patch_voice_conversion, "voice_conversion"),
-    ]:
-        content_before = content
-        content, success = patch_func(content)
+    for name, anchor, new_first_line, marker in CALL_SITES:
+        content, status, reason = apply_call_site(
+            content, name, anchor, new_first_line, marker
+        )
+        if status == "missing":
+            failures.append(f"{name}: {reason}")
+        statuses.append((name, status))
 
-        if not success:
-            print(f"[patch_process_tracking] {patch_name} patch failed")
-        elif content != content_before:
-            patches_applied.append(patch_name)
+    if not failures:
+        failures = verify(original, content)
+    if failures:
+        for failure in failures:
+            print(f"{TAG} FAILED - {failure}")
+        print(f"{TAG} core.py left unchanged")
+        return EXIT_FAILED
 
-    # Check if any changes were made
-    if content == original_content:
-        print("[patch_process_tracking] No changes needed - already patched")
-        return True
+    for name, status in statuses:
+        print(f"{TAG} {name}: {status}")
 
-    # Create backup
-    try:
-        shutil.copy2(core_py_path, backup_path)
-        print(f"[patch_process_tracking] Created backup at {backup_path}")
-    except Exception as e:
-        print(f"[patch_process_tracking] Warning: Could not create backup: {e}")
+    if content == original:
+        print(f"{TAG} Already applied, no changes")
+        return EXIT_OK
 
     try:
         with open(core_py_path, "w", encoding="utf-8") as f:
             f.write(content)
-    except Exception as e:
-        print(f"[patch_process_tracking] Error writing core.py: {e}")
-        if os.path.exists(backup_path):
-            shutil.copy2(backup_path, core_py_path)
-        return False
+    except OSError as error:
+        print(f"{TAG} Error writing core.py: {error}")
+        try:
+            with open(core_py_path, "w", encoding="utf-8") as f:
+                f.write(original)
+            print(f"{TAG} Restored original core.py")
+        except OSError as restore_error:
+            print(f"{TAG} Could not restore original core.py: {restore_error}")
+        return EXIT_FAILED
 
-    print(f"[patch_process_tracking] Patched core.py: {', '.join(patches_applied)}")
-    return True
+    print(f"{TAG} Patched core.py: {', '.join(name for name, _, _, _ in CALL_SITES)}")
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    import sys
-
-    base_path = sys.argv[1] if len(sys.argv) > 1 else "."
-    success = patch_core_py(base_path)
-    sys.exit(0 if success else 2)
+    sys.exit(patch_core_py(sys.argv[1] if len(sys.argv) > 1 else "."))
