@@ -1,41 +1,13 @@
 name: CI (macOS build)
 
-# Cheap build-only smoke test (no cert, no notarization) that catches build
-# regressions on build-relevant changes. Path-filtered so doc-only commits don't
-# burn macOS minutes. Ad-hoc signed (local-use quality) — NOT distributable.
-# For signed/notarized releases, see release-macos.yml.
+# Manual build-only smoke test (no cert, no notarization): start it from the
+# Actions tab to check that the app still builds on a clean machine. Pushes and
+# pull requests do NOT start it. macOS runners bill at about ten times Linux,
+# are metered even on public repos, and on 2026-11-26 two runs ended without a
+# runner at all. Ad-hoc signed (local-use quality), NOT distributable.
+# Releases are built locally: README_MACOS.md "Release checklist", docs/ROADMAP.md.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'build_macos.py'
-      - 'Applio.spec'
-      - 'applio_launcher.py'
-      - 'macos_wrapper.py'
-      - 'requirements_macos.txt'
-      - 'assets/entitlements.plist'
-      - 'patches/**'
-      - 'core.py'
-      - 'app.py'
-      - 'tabs/**'
-      - 'rvc/**'
-      - '.github/workflows/ci-macos.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'build_macos.py'
-      - 'Applio.spec'
-      - 'applio_launcher.py'
-      - 'macos_wrapper.py'
-      - 'requirements_macos.txt'
-      - 'assets/entitlements.plist'
-      - 'patches/**'
-      - 'core.py'
-      - 'app.py'
-      - 'tabs/**'
-      - 'rvc/**'
-      - '.github/workflows/ci-macos.yml'
   workflow_dispatch:
 
 permissions:

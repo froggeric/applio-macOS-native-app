@@ -394,20 +394,34 @@ All dependencies are included in the Applio virtual environment. For full techni
 # Recommended command for distribution
 python build_macos.py --sign --dmg --notarize
 
-# Output: dist/Applio-<VERSION>.dmg + dist/Applio.app (notarized + stapled, ~1.6GB)
+# Output: dist/Applio-<VERSION>.dmg + dist/Applio.app (notarized + stapled)
 ```
 
-### CI: signed + notarized releases via GitHub Actions
+This local build is what a GitHub release carries. See "Release checklist".
 
-Two fork-added workflows live in `.github/workflows/`:
+### GitHub Actions: manual builds only
 
-- **`ci-macos.yml`** - a build-only smoke test (ad-hoc, **no cert**). Path-filtered to run only on
-  build-relevant changes to `main` / PRs; catches build regressions cheaply. No secrets required.
-- **`release-macos.yml`** - on a pushed `v*` tag (or "Run workflow"): builds, signs, notarizes,
-  staples, and attaches `Applio-<VERSION>.dmg` to the release. Auth uses the App Store Connect API
-  key inline (`build_macos.py --api-key …`), so it needs no keychain on the runner. **Validated
-  end-to-end 2026-07-27** (test tag → green → notarized DMG attached to the release). Each run pauses
-  for **approval** (required reviewers on the `signing` environment) before it builds.
+**Releases are built locally** (see "Release checklist" below). Pushes, pull requests and tags do
+not start any macOS workflow: macOS runners bill at about ten times Linux minutes, are metered even
+on public repos, and on 2026-11-26 two runs ended without a runner at all.
+
+Two fork-added workflows live in `.github/workflows/`. Each runs only when started from the Actions
+tab or with `gh workflow run`:
+
+- **`ci-macos.yml`**: a build-only smoke test (ad-hoc, **no cert**). It checks that the app still
+  builds on a clean machine. No secrets required.
+- **`release-macos.yml`**: an optional second way to produce a release, for when the build Mac is
+  not available. Started with a tag that already exists, it builds, signs, notarizes, staples, and
+  attaches `Applio-<VERSION>.dmg` to that release. Auth uses the App Store Connect API key inline
+  (`build_macos.py --api-key …`), so it needs no keychain on the runner. Each run pauses for
+  **approval** (required reviewers on the `signing` environment) before it builds. It was validated
+  end to end on 2026-07-27 and has not run since, so check it before relying on it.
+
+```bash
+gh workflow run ci-macos.yml -R froggeric/applio-macOS-native-app
+gh workflow run release-macos.yml -R froggeric/applio-macOS-native-app -f tag=v<VERSION>
+gh run list -R froggeric/applio-macOS-native-app      # then: gh run watch <id> -R froggeric/applio-macOS-native-app
+```
 
 **One-time setup** (repo Settings → Environments → **create environment `signing`**, then add these
 secrets **to that environment** + add **Required Reviewers** so the cert can't be exfiltrated):
@@ -420,14 +434,18 @@ secrets **to that environment** + add **Required Reviewers** so the cert can't b
 | `APP_STORE_CONNECT_KEY_ID` | the 10-char Key ID |
 | `APP_STORE_CONNECT_ISSUER` | the Issuer ID (UUID) |
 
-**Cut a release:** bump `BUILD_NUMBER` (+ version if needed), commit to `main`, then
-`git tag vX.Y.Z && git push --tags`. The workflow builds the notarized DMG and attaches it to the
-release for that tag. (The upstream `release.yml` may also fire on a `config_template.json` version
-bump and generate notes - `release-macos.yml` only attaches the DMG, so they coexist.)
+The release workflow needs **one-time setup** (repo Settings → Environments → **create environment `signing`**, then add these
+secrets **to that environment** + add **Required Reviewers** so the cert can't be exfiltrated):
 
-> **Cost note:** macOS runners bill at ~10× Linux minutes and are metered even on public repos.
-> The release build is ~40–60 min; the build-only CI ~20 min. That's why `ci-macos.yml` is
-> path-filtered and `release-macos.yml` runs only on tags.
+| Secret | Value |
+|--------|-------|
+| `MACOS_CERTIFICATE` | `base64` of the Developer ID Application `.p12` - export the cert+key from Keychain Access with a password, then `base64 -i your.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PWD` | that `.p12`'s export password |
+| `APP_STORE_CONNECT_KEY` | `base64` of the App Store Connect API key (`AuthKey_*.p8`) - `base64 -i AuthKey_XXXXXXXXXX.p8 \| pbcopy` |
+| `APP_STORE_CONNECT_KEY_ID` | the 10-char Key ID |
+| `APP_STORE_CONNECT_ISSUER` | the Issuer ID (UUID) |
+
+These are GitHub-side settings; they cannot be made from code.
 
 ## Build Output
 
@@ -706,11 +724,13 @@ The dashboard runs in the app process and parses the training log directly (no R
 works identically in dev mode and the frozen app.
 
 ### Frozen-CWD invariant
-In the frozen app the working directory is the bundle, not the data dir - so upstream's CWD-relative
-paths (`logs/`, `assets/config.json`, dataset folders) break. The wrapper does `os.chdir(DATA_PATH)`
-before importing Gradio, and build-time patches (`patches/patch_*.py`) resolve paths absolutely via
-`APPLIO_DATA_PATH` → `runtime_paths.json` → `~/Applio`. This is the root cause behind most
-"works in dev, fails frozen" bugs.
+In the frozen app the working directory is the data location: the wrapper runs `os.chdir(DATA_PATH)`
+before importing Gradio, and the script dispatch changes there before it runs a worker. Upstream's
+CWD-relative paths (`logs/`, `assets/config.json`, dataset folders, language files) therefore resolve
+inside the data location. That is why the wrapper copies and refreshes bundled files there. Fork code
+still resolves the data location absolutely (`APPLIO_DATA_PATH` → `runtime_paths.json` → `~/Applio`),
+because a worker started another way need not inherit the working directory. Most "works in dev,
+fails frozen" bugs come from forgetting one of the two.
 
 ### Build-time patches (minimal upstream delta)
 Upstream files are **never** edited in the repo. `build_macos.py:pre_build_patch()` applies
@@ -731,14 +751,17 @@ touched. (A model-bundled build is the separate `--models-installer` app.)
 2. **Notarize `.app`** - `ditto`-zip → `xcrun notarytool submit --keychain-profile applio-notarize
    --wait` → parse `status: Accepted` (auto-pull the JSON log on failure, which names the offending binary).
 3. **Staple `.app`** - `xcrun stapler staple` + `validate`.
-4. **Build + sign `.dmg`** from the **stapled** app - `shutil.copytree(symlinks=True)` preserves the
-   `Python.framework` symlinks; sign the DMG with `codesign --timestamp` (no runtime/entitlements).
+4. **Build + sign `.dmg`** from the **stapled** app - copied with `ditto`, which keeps the
+   `Python.framework` symlinks (a file and symlink inventory is compared with the source); sign the
+   DMG with `codesign --timestamp` (no runtime/entitlements).
 5. **Notarize `.dmg`** → **staple `.dmg`**.
 6. **Final Gatekeeper gate** - `spctl` + `stapler validate` must report `source=Notarized Developer ID`.
 
 Authentication is an App Store Connect **Team Key** (role **App Manager**) stored via
 `xcrun notarytool store-credentials` - **no secrets live in the repo** (the `.p8` stays outside it,
-and `.gitignore` excludes `*.p8`/`*.p12`/`*.key`).
+and `.gitignore` excludes `*.p8`/`*.p12`/`*.key`). When the build Mac has no such profile, the
+build notarizes with the app-specific password stored in the keychain item `applio-notarize` and
+says so in its output.
 
 ## Fork Modifications (Build-Time Patches)
 
@@ -917,46 +940,53 @@ All included in `requirements_macos.txt`.
 
 ## Release Checklist
 
-### A. Cut a release via CI (recommended)
+Releases are made from the local build. The DMG you publish is the one you tested.
 
-`release-macos.yml` builds, signs, notarizes, and staples on a GitHub macOS runner and attaches the
-DMG to the release automatically.
+### A. Cut a release locally (the way releases are made)
 
-1. Bump `BUILD_NUMBER` in `build_macos.py` (and `version` in `assets/config_template.json` if the
-   Applio release changed). This drives `VERSION` (→ `Applio-<VERSION>.dmg`) and the derived
-   `CFBundleVersion`.
-2. Commit and push to `main`.
-3. Push a tag matching the version - `git tag v<VERSION> && git push --tags` - which triggers
-   `release-macos.yml`.
-4. **Approve the run** (the `signing` environment uses required reviewers): Actions tab → the run →
-   *Review deployments* → tick `signing` → *Approve and deploy*.
-5. ~15 min later: a signed + notarized + stapled `Applio-<VERSION>.dmg` is attached to the release.
-   The workflow's verify step already asserts Gatekeeper; optionally confirm after download:
-   ```bash
-   xcrun stapler validate "Applio-<VERSION>.dmg"     # the DMG (authoritative DMG check)
-   spctl -vvv --assess --type execute "Applio.app"    # after mounting the DMG (→ Notarized Developer ID)
-   ```
-
-### B. Cut a release locally (fallback)
-
-Use this if CI is unavailable or you want the artifact immediately.
-
-1. Ensure the **Developer ID Application** cert is in Keychain and the `applio-notarize` notarytool
-   profile exists.
+1. Check the version: `BUILD_NUMBER` in `build_macos.py`, and `version` in
+   `assets/config_template.json` when the Applio release changed. They drive `VERSION` (so
+   `Applio-<VERSION>.dmg`) and the derived `CFBundleVersion`.
 2. Build, sign, notarize, staple (both `.app` and `.dmg`):
    ```bash
    venv_macos/bin/python build_macos.py --sign --notarize --dmg
    ```
-   (For inline API-key auth without a keychain profile - e.g. headless - add
-   `--api-key <file.p8> --api-key-id <ID> --api-issuer <UUID>`.)
+   Notarization uses the notarytool profile `applio-notarize`, or else the keychain item of that
+   name (see "Code Signing & Notarization"). For inline API-key auth add
+   `--api-key <file.p8> --api-key-id <ID> --api-issuer <UUID>`.
 3. Confirm `git status` is clean (restore any dirty upstream file with `git checkout -- <file>`).
-4. Smoke-test the DMG on a clean Mac (drag to /Applications, launch - opens **without** `xattr -cr`).
-5. Create the release and upload the DMG:
+4. Test that build by hand, on a copy of your data location first. The plan for the version is
+   `docs/TEST_PLAN_<version>.md`.
+5. Verify before publishing:
    ```bash
-   gh release create v<VERSION> "dist/Applio-<VERSION>.dmg" --generate-notes
-   # if `gh release` 403s on scope: create via `gh api .../releases -X POST -f tag_name=v<VERSION>`,
-   # then curl-upload the asset to uploads.github.com (see CLAUDE.md "GitHub releases").
+   spctl -vvv --assess --type execute dist/Applio.app          # source=Notarized Developer ID
+   xcrun stapler validate dist/Applio.app
+   xcrun stapler validate "dist/Applio-<VERSION>.dmg"
    ```
+6. Tag and publish. In this checkout `gh` defaults to the upstream Applio repository, so pass `-R`:
+   ```bash
+   git tag v<VERSION>
+   git push origin v<VERSION>
+   gh release create v<VERSION> "dist/Applio-<VERSION>.dmg" --title "Applio <VERSION>" \
+     --generate-notes -R froggeric/applio-macOS-native-app
+   ```
+   The tag starts no macOS workflow. If `gh release` fails on scope, create the release with
+   `gh api` and upload with `curl` (CLAUDE.md, "GitHub releases").
+
+### B. Cut a release on GitHub (optional)
+
+Use this only when the build Mac is not available. It builds a different binary from any you have
+tested.
+
+1. Do steps 1 to 3 of A, commit and push to `main`, and push the tag
+   (`git tag v<VERSION> && git push origin v<VERSION>`). The tag starts nothing.
+2. Start the workflow with that tag: Actions tab → *Release (macOS, sign + notarize)* → *Run
+   workflow* → enter `v<VERSION>`; or
+   `gh workflow run release-macos.yml -R froggeric/applio-macOS-native-app -f tag=v<VERSION>`.
+3. **Approve the run** (the `signing` environment uses required reviewers): Actions tab → the run →
+   *Review deployments* → tick `signing` → *Approve and deploy*.
+4. Some 15 to 60 minutes later `Applio-<VERSION>.dmg` is attached to the release. Confirm it after
+   download as in A, step 5.
 
 > **Verification reference (either path):** the `.app` must report `source=Notarized Developer ID`
 > under `spctl`; the `.dmg` is verified with `xcrun stapler validate` (spctl on a disk image says

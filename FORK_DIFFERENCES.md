@@ -224,6 +224,9 @@ inside-out Mach-O signing (hardened runtime; entitlements only on the outer bund
 `spctl`/`stapler validate`. Auth is an App Store Connect **Team Key** (role **App Manager**); **no
 secrets live in the repo**. See `README_MACOS.md` → "Code Signing & Notarization" for full setup.
 
+Releases are built locally: the DMG published on GitHub is the local, hand-tested build. The two
+macOS GitHub workflows run only when started by hand.
+
 ### Build-Time Patchers
 
 All upstream modifications happen at build time:
@@ -295,7 +298,7 @@ venv_macos/bin/python build_macos.py
 # Build models installer (optional, separate artifact)
 venv_macos/bin/python build_macos.py --models-installer
 
-# Release build (signed + notarized + stapled .app and .dmg)
+# Release build (signed + notarized + stapled .app and .dmg); this is what a GitHub release carries
 venv_macos/bin/python build_macos.py --sign --notarize --dmg
 ```
 

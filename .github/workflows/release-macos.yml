@@ -1,7 +1,7 @@
 name: Release (macOS — sign + notarize)
 
 # Builds, signs (Developer ID Application), notarizes, and staples the macOS .app
-# and .dmg, then attaches the DMG to the GitHub release for the pushed tag.
+# and .dmg, then attaches the DMG to the GitHub release of a given tag.
 #
 # One-time setup — repo Settings → Environments → create environment "signing",
 # then add these secrets TO THAT ENVIRONMENT (not repo-level) + add Required
@@ -14,18 +14,19 @@ name: Release (macOS — sign + notarize)
 #   APP_STORE_CONNECT_KEY_ID   the 10-char Key ID
 #   APP_STORE_CONNECT_ISSUER   the Issuer ID (UUID)
 #
-# Cut a release: bump BUILD_NUMBER (and version if needed), commit, then
-# `git tag vX.Y.Z && git push --tags` (or run via "Run workflow"). The DMG lands
-# on the release for that tag.
+# Optional fallback only. Releases are built locally (README_MACOS.md
+# "Release checklist", docs/ROADMAP.md): the published DMG is the one that was
+# tested by hand. This workflow runs ONLY when started by hand with a tag that
+# already exists; pushing a tag starts nothing. macOS runners bill at about ten
+# times Linux and were unavailable on 2026-11-26. Not run since 2026-07-27.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to attach the build to (must already exist)'
-        required: false
+        description: 'Tag to build and attach the DMG to (must already exist, e.g. v3.7.2.1)'
+        required: true
+        type: string
 
 permissions:
   contents: write   # attach the DMG to the release
@@ -41,6 +42,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -92,6 +95,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Applio-*.dmg
+          tag_name: ${{ inputs.tag }}
+          fail_on_unmatched_files: true
           generate_release_notes: true
 
       - name: Upload notarization logs on failure

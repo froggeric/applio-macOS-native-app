@@ -71,6 +71,10 @@ build now runs on Python 3.12.
 
 ### Internal (build and release)
 
+- **Releases are built locally from now on.** A GitHub release carries the DMG built, signed and
+  notarized on the build Mac and tested by hand first. Both macOS workflows (`ci-macos.yml`,
+  `release-macos.yml`) run only when started by hand; pushes, pull requests and tags start
+  nothing. The roadmap is `docs/ROADMAP.md`.
 - **Notarization falls back to the stored app-specific password** when a Mac has no
   notarytool profile `applio-notarize` but still holds the keychain item the fork used before
   3.6.3.5. The build prints a line when it does. The profile is used whenever it exists.

@@ -430,17 +430,23 @@ history browsing.
   --notarize --dmg` → commit/push → `git tag v<VERSION>` → `gh release create v<VERSION>
   dist/Applio-<VERSION>.dmg` (if `gh release` 403s on scope, use `gh api` to create + `curl` to upload
   the asset - see "GitHub releases" below).
-- **CI signing:** `.github/workflows/release-macos.yml` (tag `v*` → build+sign+notarize+staple, attaches
-  the DMG to the release) and `ci-macos.yml` (build-only, path-filtered, no cert). The release job runs
-  in a protected `signing` **environment** and uses inline API-key auth (`build_macos.py --api-key …
-  --api-key-id … --api-issuer …` - no keychain on the runner; the `--keychain-profile` path is for
-  local). Secrets in the `signing` env: `MACOS_CERTIFICATE` (base64 .p12), `MACOS_CERTIFICATE_PWD`,
-  `APP_STORE_CONNECT_KEY` (base64 .p8), `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER`. These
-  are GitHub-side settings - a human must create the env + secrets; can't be done from code. macOS
-  runners bill at ~10× and are metered even on public repos, hence the path-filtering + tag-only triggers.
-  **Validated end-to-end 2026-07-27** (test tag → green run → notarized DMG auto-attached to the release;
-  ~15 min). Each release run PAUSES for manual approval (required reviewers on the `signing` env);
-  approve via Actions UI → *Review deployments* → `signing` → *Approve and deploy*; can't be done from code.
+- **Releases are built locally (owner decision 2026-11-26):** a GitHub release carries the DMG built,
+  signed and notarized on the build Mac (`build_macos.py --sign --notarize --dmg`) and tested by hand
+  first (README_MACOS.md "Release checklist"; `docs/ROADMAP.md`). **Both macOS workflows are
+  manual-only** (`workflow_dispatch` only): pushes, pull requests and tags start nothing. `gh` in this
+  checkout defaults to the UPSTREAM repo: pass `-R froggeric/applio-macOS-native-app`.
+  - `ci-macos.yml`: build-only smoke test (ad-hoc, no cert, not distributable). Start it when a
+    build-related change should be confirmed on a clean machine.
+  - `release-macos.yml`: optional fallback for when the build Mac is unavailable. Takes a tag that
+    already exists as its input, checks it out, and attaches the DMG to that release. Runs in the
+    protected `signing` **environment** with inline API-key auth (`build_macos.py --api-key …
+    --api-key-id … --api-issuer …`); secrets there: `MACOS_CERTIFICATE` (base64 .p12),
+    `MACOS_CERTIFICATE_PWD`, `APP_STORE_CONNECT_KEY` (base64 .p8), `APP_STORE_CONNECT_KEY_ID`,
+    `APP_STORE_CONNECT_ISSUER` (GitHub-side settings; a human must create them). Each run PAUSES for
+    approval (Actions UI → *Review deployments* → `signing` → *Approve and deploy*; not from code).
+  - Not run since its 2026-07-27 validation: on 2026-11-26 two runs ended after 15 min with "The job
+    was not acquired by Runner of type hosted" (arm64 runner capacity), so this path has never run on
+    Python 3.12 or `macos-15`. macOS runners bill at ~10× and are metered even on public repos.
 - **Signing on macOS 27 (since 2026-11-26):** codesign does not find the Developer ID by its
   name (it contains an accented character) and answers "no identity found", although
   `security find-identity` lists it. `resolve_signing_identity()` passes the SHA-1 fingerprint
@@ -491,8 +497,9 @@ history browsing.
   (make it the LAST command - a trailing `echo` masks its real exit). `status=waiting` = the `signing`
   environment's required-reviewer gate (approve in the Actions UI, not from code); `status=queued` =
   waiting for a runner. `gh run view <id> --log-failed` pulls the failed step's output.
-- **Testing `release-macos.yml`:** push a throwaway tag (`git tag vX-citest && git push --tags`),
-  approve the run, confirm, then tear down with `gh release delete vX-citest --cleanup-tag -y` (unlike
+- **Testing `release-macos.yml`:** push a throwaway tag (`git tag vX-citest && git push origin
+  vX-citest`), start the workflow by hand with `-f tag=vX-citest`, approve the run, confirm, then tear
+  down with `gh release delete vX-citest --cleanup-tag -y -R froggeric/applio-macOS-native-app` (unlike
   `gh release create`, `gh release delete` needs no workflow scope). Don't use a real version tag for tests.
 - **Upstream 3.6.3 changed `subprocess.run` calls:** upstream now assigns
   `result = subprocess.run(...)` and adds `if result.returncode != 0: return ...` after each.
@@ -775,7 +782,10 @@ start/terminal announcements on client!=native (NOT a revert).
 - Upload assets via curl when `gh release upload` fails: `curl -X POST -H "Authorization: token $(gh auth token)" -H "Content-Type: application/zip" --data-binary @file.zip "https://uploads.github.com/repos/{owner}/{repo}/releases/{release_id}/assets?name=file.zip"`
 - Delete release: `gh api repos/{owner}/{repo}/releases/{id} -X DELETE`
 - Delete a release ASSET: `gh api -X DELETE repos/{owner}/{repo}/releases/assets/{asset_id}` (path is `releases/assets/{asset_id}`, NOT `releases/{release_id}/assets/{id}`, which 404s)
-- **Manual release vs CI:** pushing a `v*` tag auto-runs `release-macos.yml` (build+sign+attach). If you cut a release MANUALLY (local signed DMG + curl upload), `gh run cancel <id>` the triggered run right after tagging; otherwise it clashes on the same asset name + bills macOS minutes
+- **Releases are local:** pushing a `v*` tag starts nothing (the macOS workflows are manual-only since
+  2026-11-26), so there is no run to cancel. Publish the DMG that was tested:
+  `gh release create v<VERSION> dist/Applio-<VERSION>.dmg --title "Applio <VERSION>" --generate-notes
+  -R froggeric/applio-macOS-native-app`. Only on the owner's explicit request.
 
 ## Data Flow
 
