@@ -368,6 +368,15 @@ All dependencies are included in the Applio virtual environment. For full techni
    xcrun notarytool history --keychain-profile "applio-notarize"
    ```
 
+   If this Mac has no profile of that name but still holds the app-specific password the fork
+   used before 3.6.3.5 (a keychain item named `applio-notarize` whose account is your Apple ID),
+   the build script notarizes with that instead and says so in its output. The profile is used
+   whenever it exists. To see which one a Mac has:
+   ```bash
+   security find-generic-password -s com.apple.gke.notary.tool -a applio-notarize  # the profile
+   security find-generic-password -s applio-notarize                                # the keychain item
+   ```
+
 ### Build Commands
 
 | Purpose | Command |

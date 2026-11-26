@@ -248,6 +248,64 @@ def resolve_signing_identity():
 
 SIGNING_IDENTITY = resolve_signing_identity()
 
+
+def _keychain_item(service, account=None):
+    """True when the keychain holds a generic password item with this service."""
+    command = ["security", "find-generic-password", "-s", service]
+    if account:
+        command += ["-a", account]
+    return subprocess.run(command, capture_output=True, text=True).returncode == 0
+
+
+def _app_specific_password_auth():
+    """notarytool arguments for Apple ID and app-specific password, or None.
+
+    Used when the notarytool profile is missing but the keychain still holds the
+    item the fork used before 3.6.3.5:
+        security add-generic-password -a "<apple id>" -s "applio-notarize" -w
+    """
+    import re
+
+    if not _keychain_item("applio-notarize"):
+        return None
+    attributes = subprocess.run(
+        ["security", "find-generic-password", "-s", "applio-notarize"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    match = re.search(r'"acct"<blob>="([^"]+)"', attributes)
+    if not match:
+        return None
+    apple_id = match.group(1)
+    password = subprocess.run(
+        [
+            "security",
+            "find-generic-password",
+            "-a",
+            apple_id,
+            "-s",
+            "applio-notarize",
+            "-w",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if password.returncode != 0 or not password.stdout.strip():
+        return None
+    print(
+        "Notarization: this Mac has no notarytool profile 'applio-notarize'; "
+        "using the app-specific password stored in the keychain item of that name."
+    )
+    return [
+        "--apple-id",
+        apple_id,
+        "--team-id",
+        TEAM_ID,
+        "--password",
+        password.stdout.strip(),
+    ]
+
+
 # Notarytool auth: inline App Store Connect API key (CI, no keychain needed) if
 # provided, else the keychain profile (local interactive). Selected once, used by
 # _notarytool_submit.
@@ -265,6 +323,14 @@ if args.api_key:
     ]
 else:
     _NOTARY_AUTH = ["--keychain-profile", KEYCHAIN_PROFILE]
+    if KEYCHAIN_PROFILE == "applio-notarize" and not _keychain_item(
+        "com.apple.gke.notary.tool", KEYCHAIN_PROFILE
+    ):
+        # No notarytool profile of that name on this Mac. Fall back to what the
+        # fork used before 3.6.3.5: an app-specific password in a keychain item
+        # named "applio-notarize" whose account is the Apple ID. It is read at
+        # build time and written nowhere.
+        _NOTARY_AUTH = _app_specific_password_auth() or _NOTARY_AUTH
 
 # --- Apple-valid plist versions (notarization requires ≤3 numeric segments,
 # no leading zeros — Apple strips them → mismatch). The legacy VERSION

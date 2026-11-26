@@ -448,6 +448,14 @@ history browsing.
   given). Any binary that cannot be signed, or a requested `--sign` that fails, stops the build
   before a DMG is built or anything is notarized (exit 1). Before that fix a build could strip
   every signature, sign nothing, and exit 0 with "BUILD COMPLETE".
+- **Notarization auth on this Mac (2026-11-26):** there is NO notarytool profile
+  `applio-notarize` here (`security find-generic-password -s com.apple.gke.notary.tool -a
+  applio-notarize` finds nothing), only the pre-3.6.3.5 keychain item (service
+  `applio-notarize`, account = Apple ID, app-specific password). `build_macos.py` falls back
+  to it automatically when the profile is missing (`_app_specific_password_auth`; it prints a
+  line saying so). To restore the documented path run `xcrun notarytool store-credentials
+  applio-notarize --key … --key-id … --issuer …`; the profile always wins. Check credentials
+  without submitting: `xcrun notarytool history --keychain-profile applio-notarize`.
 - **DMG symlink trap:** `create_dmg` copies the app with `ditto` and compares a
   (files, symlinks) inventory of copy and source (since 2026-11-26; it was
   `shutil.copytree(..., symlinks=True)`). Python.framework
