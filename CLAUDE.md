@@ -261,6 +261,17 @@ after an upstream sync" below), because upstream rewrites the source our `patche
   `try/finally` so `_untrack_process()` always runs, and use `stdout=PIPE, stderr=PIPE` +
   `communicate()` to preserve upstream's `RuntimeError(stderr)` behavior.
 
+**Mac App Store edition (planned 2026-11-26, in progress on the branch `store-edition`):**
+- Read `docs/APP_STORE_READINESS.md` (the assessment and the owner's decisions) and
+  `docs/superpowers/plans/2026-11-26-app-store-edition.md` (ten tasks with code and tests).
+- It is a build-time variant: `build_macos.py --store` writes into `dist-store/`, never into
+  `dist/`. Upstream files are changed only by store patchers in `patches/store/`, with markers
+  in `PATCH_MARKERS_STORE`; fork-owned code branches on `applio_edition.store_edition()`.
+- In the store edition the data lives in a folder the user chose, never in the app's container.
+- Nothing is uploaded to App Store Connect without the owner's explicit word.
+- `LSMinimumSystemVersion` is computed from the bundle (`set_minimum_macos_version()`): the
+  binaries of 3.7.2.1 need macOS 15.0, although its Info.plist said 12.0.
+
 **Safe-to-modify files** (macOS-only, not in upstream):
 - `assets/entitlements.plist`
 - `patches/`, `macos_wrapper.py`, `build_macos.py`, `Applio.spec`
