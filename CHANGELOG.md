@@ -5,6 +5,70 @@ All notable changes to this macOS-native fork of Applio. Versions follow
 
 ## [Unreleased]
 
+## [3.7.2.1] — 2026-11-26
+
+First fork release on upstream 3.7.2 (the previous one, 3.6.4.2, was on 3.6.4). The macOS
+build now runs on Python 3.12.
+
+### Changed
+
+- **Upstream sync 2026-11-26 (3.6.4 to 3.7.2, 109 commits).** The merge was conflict-free; the
+  patchers needed the work (see Fixed). What upstream brings: Apple GPU (Metal) support for
+  training and across inference and real-time conversion; a Terminal tab with the live output
+  of preprocessing, extraction and training; a reworked interface with a sidebar and stepped
+  cards; ONNX engine precision; SwiftF0; a queued training workflow with live batch progress
+  bars; a smaller memory footprint for pitch extraction on long recordings; a new text-to-speech
+  endpoint. Upstream removed the post-process effects rack, "clean audio" and noisereduce, the
+  split-audio conversion option and the older pitch extraction methods, and reduced the
+  interface languages from 60 to 15. Training needs at least three batches of data.
+- **Python 3.12.** Upstream's package pins need Python 3.11 or later. `requirements_macos.txt`
+  now includes upstream's list instead of copying its pins, and `install_applio_mac.sh` creates
+  `venv_macos` with uv or a `python3.12` on your PATH.
+- **Translations, themes, tab scripts and sample-rate configs are replaced when a new app
+  ships different ones.** The app reads them from the data location, and they used to be
+  copied once, so an installation made with an older version kept the old files after an
+  upgrade. Language files the app no longer ships are left in place.
+- **Settings.** Upstream 3.7 creates `assets/config.json` from `assets/config_template.json`
+  and merges new defaults on every start. The wrapper adds the keys a newer template has to an
+  existing `assets/config.json`; values you have are never changed.
+- **The build stops when a patch lands only partly.** After the build-time patches run, one
+  marker per required part of each patch is counted in its file (`PATCH_MARKERS` in
+  `build_macos.py`).
+
+### Fixed
+
+- **Preprocessing, extraction, training and text-to-speech jobs are reported to the Process
+  Dashboard again** (pause, resume, stop, log, history, best epoch and loss curve). On the
+  merged sources the tracking patch had left three of the four job types untracked, and the
+  RefineGAN-Legacy training patch had skipped its detection block. Both follow upstream's new
+  code now. Upstream's own failure messages after each launch are kept: the training tab relies
+  on them to raise a warning and to block the steps that follow a failed one.
+- **Conversion toasts are back.** Upstream 3.7 prints the batch start, progress and result
+  lines instead of showing toasts; the fork shows them as toasts again.
+- **Training progress bars** in the Progress Monitor follow upstream's new format, so batches
+  are shown in the live zone again instead of scrolling by as text.
+- **Worker output reaches the Terminal tab.** Upstream's output capture redirected tracked
+  workers away from their per-process log; that log is forwarded to the terminal session log
+  instead.
+- **File → Set Data Location… takes effect.** The folder was saved under a preference key
+  that nothing read.
+- **Signing on macOS 27.** codesign does not find the Developer ID by its name there, so a
+  signed build could strip every signature, sign nothing and still end with "BUILD COMPLETE".
+  The build signs by the identity's fingerprint and stops when signing fails.
+- **Sources are restored byte for byte after a build**, also after a failed build or a failed
+  patch. A text-mode restore had turned the CRLF inference tab into an LF file.
+- **`applio_wrapper.log` shows the full build version again** (it fell back to the upstream
+  version because `build_info.json` lives in `Contents/Resources`, not in the folder the frozen
+  app treats as its base).
+- **Accessibility payload:** the current page is read from the new sidebar (the page tabs are
+  hidden since upstream 3.7), so the launcher's layout callback fires again when you change
+  page.
+
+### Added
+
+- `APPLIO_DATA_PATH` set before launch pins the data location for that run: no first-run
+  prompt, and the saved preference is neither read nor written.
+
 ## [3.6.4.2] — 2026-09-14
 
 Third fork release on the upstream 3.6.4 base. Since the last released build (3.6.4.0,

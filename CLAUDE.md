@@ -15,7 +15,7 @@ Applio is a voice conversion application built on RVC (Retrieval-Based Voice Con
 ```bash
 # Installation
 ./run-install.sh              # Cross-platform (Python 3.12, creates .venv)
-./install_applio_mac.sh       # macOS native (Python 3.10, creates venv_macos)
+./install_applio_mac.sh       # macOS native (Python 3.12 via uv, creates venv_macos)
 run-install.bat               # Windows
 
 # Running (Gradio web UI)
@@ -153,7 +153,23 @@ git merge upstream/main
 ```
 
 The fork keeps macOS work in separate files, so the git merge is nearly conflict-free
-(last sync 2026-09-11, 5 commits: **conflict-free, ZERO patcher re-pointing** — our PR
+(last sync 2026-11-26, upstream 3.6.4 → **3.7.2**, 109 commits: **conflict-free merge, but the
+real work was in the patchers** — on the merged tree every patcher still exited 0 while four
+did only part of their job: `patch_process_tracking` left 3 of 4 launches untracked,
+`patch_refinegan_legacy_train` silently skipped its detection block, `patch_dataset_paths`
+skipped a fix, and Browse buttons report missing fields as "skipped"). Consequences: process
+tracking was rebuilt around one `_applio_tracked_run()` helper that replaces upstream's
+`run_quiet()` launch lines (upstream 3.7 checks each child's return code right after them, and
+the training tab keys on those message prefixes — never replace them with fork wording);
+`patch_inference_progress` re-anchored (the batch tail now ends with `self.cleanup_model()` and
+a guarded pid-file removal) and bridges upstream's print-only `_toast` back onto gradio toasts;
+new `patch_pretrained_rates` (upstream 3.7.2 rejects 44100 in `ensure_pretrained()`);
+`patch_train_44100` also patches core.py's CLI choices; RETIRED: `patch_data_paths`,
+`patch_preflight_validation`, `patch_pretrained_selector` (30 → 28 registered entries).
+Upstream 3.7 resolves its paths itself from `APPLIO_LOGS_DIR / CONFIG_FILE / ROOT / CODE_ROOT`
+(`rvc/lib/user_config.py`) — the wrapper exports them. See "Patcher exit codes" for
+`PATCH_MARKERS`, the guard that now makes such partial patches fail the build. Prior sync
+2026-09-11, 5 commits: **conflict-free, ZERO patcher re-pointing** — our PR
 **#1280 merged, closing the upstream a11y program at 8/8** (tuple-choices friendly names in
 inference/realtime/train/tts dropdowns); fdec9456 black format run (moved app.py's
 `allowed_paths = ["logs"]` to unspaced — `patch_progress_routes`' anchor already tolerates
@@ -208,6 +224,20 @@ after an upstream sync" below), because upstream rewrites the source our `patche
 - Each patcher prints `Pattern not found` / `patch failed` when upstream changed its anchor;
   re-point the regex/string to the new code, then verify the patched file `py_compile`s and the
   injected code is correctly placed before committing.
+- **`PATCH_MARKERS` (since the 2026-11-26 sync):** exit codes are not proof. After the patchers
+  run, `pre_build_patch()` counts one marker per required sub-patch in its file
+  (`{patcher: [(file, substring, least count)]}` at module level in `build_macos.py`) and stops
+  the build when one is missing. A patcher listed in `patches_to_apply` without an entry there
+  fails immediately; after re-pointing a patcher, update its markers to what it injects now.
+  Browse buttons use exact per-file counts (3+3+3+1+2+1 = 13 fields).
+- **Patch-stage snapshot/restore (since the 2026-11-26 sync):** before the patchers run the
+  build snapshots EVERY tracked text file (bytes) and restores all that differ afterwards, in a
+  `finally` (also after a failed build and after a failed patch). So a patcher may edit files
+  other than the one listed for it (`patch_train_44100` edits core.py too) and nothing is left
+  behind. It must stay byte-based: a text-mode round trip rewrote the CRLF
+  `tabs/inference/inference.py` to LF (whole-file diff). To exercise only the patch stage of
+  the real script: ast-extract `pre_build_patch` + helpers + `PATCH_MARKERS` and call
+  `pre_build_patch()` (local tool: `.claude/port-tools/applio_run_patch_stage.py <repo>`).
 - **Patcher exit codes:** `0` = patched/already applied, `2` = anchor miss (fatal), `1` = usage
   guard (fires only when run standalone without an argument - never in the build loop).
   `pre_build_patch()` fails the build on ANY nonzero patcher exit (plus missing patcher/source
@@ -241,20 +271,19 @@ after an upstream sync" below), because upstream rewrites the source our `patche
 **Python Version Requirements:**
 | Context | Python | Virtual Env |
 |---------|--------|-------------|
-| `install_applio_mac.sh` | 3.10 | `venv_macos` |
-| `build_macos.py` | 3.10 | `venv_macos` |
+| `install_applio_mac.sh` | 3.12 | `venv_macos` |
+| `build_macos.py` | 3.12 | `venv_macos` |
 | `run-install.sh` | 3.12 | `.venv` |
 | `run-applio.sh` | 3.12 | `.venv` |
 
-**Important:** PyInstaller builds require Python 3.10 (3.12+ has compatibility issues).
-
-**Python 3.10 vs upstream's 3.11+ stack (post-3.6.3 sync):** Upstream now pins packages
-that require Python 3.11+ (numpy 2.4.6, scipy 1.18, matplotlib 3.11, pandas 2.3+). The fork
-stays on 3.10 (PyInstaller), so `requirements_macos.txt` uses the latest py3.10-compatible
-versions instead: **numpy 2.2.6, scipy 1.15.3, numba 0.66.0, matplotlib 3.10.9, pandas 2.2.x+**.
-(pandas 2.3.x imports fine on 3.10 but needs numpy 2.x ABI - the old numpy 1.26 caused
-`pandas._libs.tslibs.vectorized` failures.) If the fork ever moves to Python 3.11, these can
-re-align to upstream's exact pins; that needs `brew install python@3.11` + a fresh `venv_macos`.
+**Since the 3.7.2 sync (2026-11-26) the macOS build runs on Python 3.12**, the version upstream
+targets. `requirements_macos.txt` is `-r requirements.txt` plus the macOS-only packaging and
+native-UI packages (pywebview, pyinstaller, pyobjc Cocoa + AVFoundation, Pillow, `setuptools<70`,
+markdown), so it follows upstream's pins instead of copying them (upstream pins need 3.11+:
+numpy 2.4, scipy 1.18, matplotlib 3.11). `./install_applio_mac.sh` creates `venv_macos` with uv
+(`brew install uv`) or a `python3.12` on PATH (`--python /path/to/python3.12`). The uv-created
+venv has no pip: install tools with `uv pip install --python venv_macos/bin/python <pkg>`
+(e.g. `pytest`, `black==26.5.1`).
 
 **Phase 2 - single-process merge (shipped in 3.6.3.7):**
 The two-process launcher+wrapper was merged into ONE native process (fixed: Hide not hiding the
@@ -289,6 +318,20 @@ history browsing.
 
 **External Data Storage:**
 - First-run prompts user to select data location via native macOS folder dialog
+- **Bundled resources (since 2026-11-26):** `setup_bundled_resources()` replaces translations
+  (`assets/i18n`), themes, the tab scripts and the sample-rate configs in the data location
+  whenever they differ from the bundled copy. The app reads them relative to its working
+  directory, which is the data location; they used to be copied once, so an existing
+  installation kept the old language files and scripts after an upgrade.
+  `assets/config_template.json` is refreshed the same way; the user's `assets/config.json` is
+  created from it once and afterwards only gains keys a newer template has.
+- **`APPLIO_DATA_PATH` set before launch** pins the data location for that run (no first-run
+  prompt; the saved preference is neither read nor written): use it to test a build against a
+  separate data folder.
+- Upstream ≥ 3.7 paths: the wrapper exports `APPLIO_LOGS_DIR`, `APPLIO_CONFIG_FILE`,
+  `APPLIO_ROOT` (data location) and `APPLIO_CODE_ROOT` (bundle) for
+  `rvc/lib/user_config.py`; nothing reads `APPLIO_LOGS_PATH` any more (still exported for the
+  fork's own patches).
 - Preferences stored in NSUserDefaults (`com.iahispano.applio`)
 - Default location: `~/Applio/`
 - Build-time patcher (`patches/patch_data_paths.py`) redirects `core.py`'s `logs_path` to use `now_dir`
@@ -336,9 +379,17 @@ history browsing.
 - **Corrupted `venv_macos` package:** if `import torch`/`pandas` fails with a partial-init /
   circular-import error, the installed wheel is corrupt → fix with
   `venv_macos/bin/python -m pip install --force-reinstall --no-deps <pkg>`.
-- **Frozen subprocess CWD is the bundle (`sys._MEIPASS`/Frameworks), not the data dir**,
-  so `os.getcwd()`/`now_dir`-relative paths break. Resolve user/data paths absolutely:
-  `APPLIO_DATA_PATH` env → `runtime_paths.json` `data_path` → `~/Applio`.
+- **Frozen working directory is the data location.** `start_gui()` runs `os.chdir(DATA_PATH)`
+  before Gradio is imported, and the script dispatch (`Applio <script.py>`) changes to
+  `APPLIO_DATA_PATH` before `runpy`. So `now_dir = os.getcwd()` (core.py, the tabs,
+  `assets/i18n/i18n.py`) resolves INSIDE the data location. That is why the wrapper copies and
+  refreshes translations, themes, tab scripts and sample-rate configs there. Code lives in the
+  bundle: `sys._MEIPASS` is `Contents/Frameworks`, whose top-level entries are links into
+  `Contents/Resources` (verified 2026-11-26). `build_info.json` is written to
+  `Contents/Resources` AFTER PyInstaller, so it is not reachable through `_MEIPASS`: read it
+  from the Resources folder (`applio_update_check`, the wrapper's `_get_version_info`).
+  Fork code still resolves the data location absolutely (`APPLIO_DATA_PATH` →
+  `runtime_paths.json` → `~/Applio`): a worker started another way need not inherit the CWD.
 - **`logging.basicConfig` is a no-op once an earlier import configured the root logger** →
   launcher/wrapper logs silently lost. Own the root logger: clear handlers + add a `FileHandler`
   explicitly (see `applio_launcher.py` logging setup, `macos_wrapper.py:setup_logging`).
@@ -390,7 +441,16 @@ history browsing.
   **Validated end-to-end 2026-07-27** (test tag → green run → notarized DMG auto-attached to the release;
   ~15 min). Each release run PAUSES for manual approval (required reviewers on the `signing` env);
   approve via Actions UI → *Review deployments* → `signing` → *Approve and deploy*; can't be done from code.
-- **DMG symlink trap:** `create_dmg` MUST use `shutil.copytree(..., symlinks=True)`. Python.framework
+- **Signing on macOS 27 (since 2026-11-26):** codesign does not find the Developer ID by its
+  name (it contains an accented character) and answers "no identity found", although
+  `security find-identity` lists it. `resolve_signing_identity()` passes the SHA-1 fingerprint
+  of the team's "Developer ID Application" identity instead (`--identity` still wins when
+  given). Any binary that cannot be signed, or a requested `--sign` that fails, stops the build
+  before a DMG is built or anything is notarized (exit 1). Before that fix a build could strip
+  every signature, sign nothing, and exit 0 with "BUILD COMPLETE".
+- **DMG symlink trap:** `create_dmg` copies the app with `ditto` and compares a
+  (files, symlinks) inventory of copy and source (since 2026-11-26; it was
+  `shutil.copytree(..., symlinks=True)`). Python.framework
   uses symlinks (`Python -> Versions/Current/Python`, `Resources -> Versions/Current/Resources`,
   `Current -> Versions/3.x`); the default `symlinks=False` flattens them into real files, breaking
   the framework's signature seal → the DMG notarization is rejected with "The signature of the binary
@@ -541,7 +601,11 @@ Fork-owned modules (all lazy-importing AppKit or nothing; all in HIDDEN_IMPORTS)
   swaps upstream `app.py`'s inline `js=` entry for a `_applio_a11y_js(client_mode)` helper reading
   the file from `now_dir`/`sys._MEIPASS` (ships via the `("assets","assets")` datas). Creates a
   live region + "Last result" region client-side, polls the route every 2 s, announces job
-  milestones/terminals, heals accordion/tab semantics (selectors pinned against gradio 6.20.0), restores focus after gradio re-renders, and records output-textbox changes in the
+  milestones/terminals, heals accordion/tab semantics (selectors pinned against gradio 6.20.0; since upstream 3.7 the
+  pages are chosen from a sidebar, so the current page is read from
+  `#applio-navigation button[aria-current="page"]` (`PAGE_SELECTED`), and pages and hidden blocks
+  render lazily: a Browse button inside a hidden block, e.g. the custom pretrained pickers, is in
+  the DOM only once that block is shown), restores focus after gradio re-renders, and records output-textbox changes in the
   "Last result" region (visible-ONLY since Phase 4e — output-change speech removed; one joined
   `announce()` per poll is the payload's only speaker).
 - `applio_native_picker.py` — `native_browse(mode)` opens NSOpenPanel via `AppHelper.callAfter`

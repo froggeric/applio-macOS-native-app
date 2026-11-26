@@ -56,23 +56,24 @@ pywebview clobbers them. The two-process code and the `APPLIO_SINGLE_PROCESS` fl
 
 ### Build-Time Patches
 
+Applied by `build_macos.py` before PyInstaller runs, in this order, then the sources are restored. Upstream files are never edited in the repository. After the patchers run, `PATCH_MARKERS` in `build_macos.py` proves that every required part of every patch landed.
+
 | File | Purpose |
 |------|---------|
-| `patches/patch_train_44100.py` | Patches training UI to add 44.1kHz sample rate option |
-| `patches/patch_data_paths.py` | Patches core.py to redirect logs_path to external data location |
+| `patches/patch_dataset_paths.py` | Resolves the dataset path before the preprocess command is built |
+| `patches/patch_download_paths.py` | Custom pretrained downloads go to the data location |
+| `patches/patch_process_tracking.py` | Reports preprocess, extract, training and TTS jobs to the Progress Monitor (pause, resume, stop, logs, history) |
+| `patches/patch_subprocess_validation.py` | Checks the outputs of preprocessing and extraction before the next step |
+| `patches/patch_custom_pretrained_paths.py` | Resolves custom pretrained paths |
+| `patches/patch_train_paths.py`, `patch_mute_paths.py`, `patch_f0_model_paths.py` | Absolute paths inside the bundled app |
+| `patches/patch_pretrained_rates.py` | Accepts 44.1 kHz in the built-in pretrained lookup |
+| `patches/patch_loading_html.py`, `patch_version_checker.py` | Show the installed version |
+| `patches/patch_train_44100.py` | Adds the 44.1 kHz sample rate |
+| `patches/patch_multiprocessing.py`, `patch_extract_error_logging.py`, `patch_preprocess_error_logging.py` | Multiprocessing safety and file-based error logs |
+| `patches/patch_refinegan_legacy*.py` | Support for the original RefineGAN pretrained models |
+| `patches/patch_inference_progress.py`, `patch_stop_infer.py` | Inference progress file, cooperative Stop, conversion toasts |
+| `patches/patch_stop_feedback.py`, `patch_progress_routes.py`, `patch_browse_buttons.py`, `patch_web_a11y_payload.py` | Accessibility: announced Stop feedback, progress route, Browse buttons, web payload |
 | `patches/download_pretraineds.py` | Downloads custom pretrained models (KLM49, TITAN, KLM50, VCTK) |
-| `patches/patch_refinegan_legacy.py` | Patches RefineGAN for original RVC-Boss pretrained model compatibility |
-| `patches/patch_refinegan_legacy_*.py` | Architecture patches for RefineGAN legacy discriminator/generator |
-| `patches/patch_process_tracking.py` | Process tracking for training/inference monitoring |
-| `patches/patch_static_resources.py` | Static resource path resolution for bundled app |
-| `patches/patch_multiprocessing.py` | Multiprocessing fixes for macOS |
-| `patches/patch_f0_model_paths.py` | F0 model path resolution |
-| `patches/patch_pretrained_selector.py` | Pretrained model selector patches |
-| `patches/patch_train_paths.py` | Training path resolution |
-| `patches/patch_dataset_paths.py` | Dataset path resolution |
-| `patches/patch_extract_error_logging.py` | Enhanced error logging for feature extraction |
-| `patches/patch_subprocess_validation.py` | Subprocess validation for training |
-| `patches/patch_preflight_validation.py` | Preflight validation for training configuration |
 
 ### Assets
 
@@ -88,6 +89,7 @@ pywebview clobbers them. The two-process code and the `APPLIO_SINGLE_PROCESS` fl
 | File | Purpose |
 |------|---------|
 | `tests/test_menu_spec.py` | Pure-Python gate for the menu: asserts `menu_spec.py` structure + taxonomy (Applio/File/Process/Window/Help, key contracts) and the `packaging.version` update-compare. Run: `venv_macos/bin/python tests/test_menu_spec.py` |
+| `tests/` | 115 tests in 14 files: menu, accessibility, translations, Browse buttons, dashboard, inference progress, patch fixtures, patcher exit codes, progress route, quit gate. Run: `venv_macos/bin/python -m pytest -q tests` (lead with `-q`: a path-first argument list trips the launcher's script dispatch) |
 
 ## Modified Files (from Upstream)
 
@@ -274,6 +276,8 @@ git merge upstream/main
 ```
 
 Since this fork only adds files that don't exist in upstream, there should be no merge conflicts. Model files in `rvc/models/` are gitignored and will persist.
+
+The merge is the easy part. Upstream rewrites the sources the build-time patchers anchor on, so after a merge run the fork's tests, run the patch stage and check `PATCH_MARKERS`, and re-point the patchers that miss. On the 2026-11-26 sync to upstream 3.7.2 the merge was conflict-free while four patchers silently did part of their work.
 
 ---
 

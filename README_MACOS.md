@@ -5,10 +5,10 @@ This directory contains the scripts to build Applio as a standalone native macOS
 ## Prerequisites
 
 - **macOS** (Apple Silicon M1/M2/M3 recommended)
-- **Python 3.10** (required - 3.12+ has PyInstaller compatibility issues)
+- **Python 3.12**, the version upstream Applio targets. The install script gets it through [uv](https://docs.astral.sh/uv/) (`brew install uv`) or uses a `python3.12` on your PATH.
 - **Homebrew** packages:
   ```bash
-  brew install python@3.10 ffmpeg
+  brew install uv ffmpeg
   ```
 
 ## Quick Start
@@ -16,19 +16,17 @@ This directory contains the scripts to build Applio as a standalone native macOS
 ### Option 1: Build from Source
 
 ```bash
-# 1. Create virtual environment
-/opt/homebrew/opt/python@3.10/bin/python3.10 -m venv venv_macos
-source venv_macos/bin/activate
+# 1. Create venv_macos and install the dependencies (PyObjC, PyInstaller, Pillow)
+./install_applio_mac.sh
 
-# 2. Install dependencies (includes PyObjC, PyInstaller, Pillow)
-pip install -r requirements_macos.txt
+# 2. Build the app (must run from within venv_macos)
+venv_macos/bin/python build_macos.py
 
-# 3. Build the app (must run from within venv_macos)
-python build_macos.py
-
-# 4. Run
+# 3. Run
 open dist/Applio.app
 ```
+
+To pick the interpreter yourself: `./install_applio_mac.sh --python /path/to/python3.12`. `requirements_macos.txt` includes upstream's `requirements.txt`, so the macOS build follows upstream's package pins.
 
 > **Important:** Always run `build_macos.py` from within `venv_macos`. Running outside the venv will produce "Hidden import not found" warnings and the resulting app will be missing runtime dependencies (PyObjC, torch, gradio, etc.).
 
