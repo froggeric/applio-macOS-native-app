@@ -131,8 +131,10 @@ assets/
 - **Owner test builds**: `test/NN-app` branch = fork main + merge the PR branch + re-drop the
   now-redundant toast patcher (template commits 5e634319/bd9e6115); doubles as pre-sync check.
 - **Headless gradio driver**: POST `/gradio_api/queue/join` BEFORE opening the SSE
-  `/gradio_api/queue/data` stream; `/gradio_api/config` for component/event discovery; tuple
-  dropdowns take the VALUE (raw path).
+  `/gradio_api/queue/data` stream; `/config` for component/event discovery (gradio 6.20 has no
+  `/gradio_api/config` route); tuple dropdowns take the VALUE (raw path). Simpler for training:
+  `gradio_client.Client(url).predict(..., api_name=...)` with `/_preprocess_with_toast`,
+  `/_extract_with_toast`, `/enforce_terms_2`. Fork route: `/applio-a11y/progress`.
 - **Quit gate for in-process inference** (a4dcae98): BOTH quit paths (menu terminate + wrapper
   X-close) detect running/cancelling conversions via the progress file and prompt; confirmed
   quit writes the cancel flag + ≤2.5 s grace; stale `cancelling` swept at startup
@@ -148,9 +150,13 @@ This fork maintains minimal delta from upstream - only macOS additions, no core 
 **Sync with upstream:**
 ```bash
 git remote add upstream https://github.com/IAHispano/Applio.git   # once
-git fetch upstream
+git fetch --all
 git merge upstream/main
 ```
+
+Before judging where the fork stands, or syncing: `git fetch --all && git status -sb`. This
+checkout was months stale once (2026-11-25: local `main` at 2026-03-17, GitHub 253 commits
+ahead) and a whole port went onto the wrong base.
 
 The fork keeps macOS work in separate files, so the git merge is nearly conflict-free
 (last sync 2026-11-26, upstream 3.6.4 → **3.7.2**, 109 commits: **conflict-free merge, but the
@@ -238,6 +244,8 @@ after an upstream sync" below), because upstream rewrites the source our `patche
   `tabs/inference/inference.py` to LF (whole-file diff). To exercise only the patch stage of
   the real script: ast-extract `pre_build_patch` + helpers + `PATCH_MARKERS` and call
   `pre_build_patch()` (local tool: `.claude/port-tools/applio_run_patch_stage.py <repo>`).
+  Never commit or edit tracked `.py/.html/.js/.json/.txt/.sh/.spec` files while a build runs:
+  the restore writes the pre-build snapshot back over them.
 - **Patcher exit codes:** `0` = patched/already applied, `2` = anchor miss (fatal), `1` = usage
   guard (fires only when run standalone without an argument - never in the build loop).
   `pre_build_patch()` fails the build on ANY nonzero patcher exit (plus missing patcher/source
@@ -283,7 +291,9 @@ markdown), so it follows upstream's pins instead of copying them (upstream pins 
 numpy 2.4, scipy 1.18, matplotlib 3.11). `./install_applio_mac.sh` creates `venv_macos` with uv
 (`brew install uv`) or a `python3.12` on PATH (`--python /path/to/python3.12`). The uv-created
 venv has no pip: install tools with `uv pip install --python venv_macos/bin/python <pkg>`
-(e.g. `pytest`, `black==26.5.1`).
+(e.g. `pytest`, `black==26.5.1`). Before pushing: `venv_macos/bin/python -m black --check <changed
+fork-owned files>` and `venv_macos/bin/python -m pytest -q tests` (115 tests); the Code Formatter
+workflow opens a pull request for anything black would change.
 
 **Phase 2 - single-process merge (shipped in 3.6.3.7):**
 The two-process launcher+wrapper was merged into ONE native process (fixed: Hide not hiding the
@@ -400,9 +410,32 @@ history browsing.
   `rvc/train/train.py` sample-rate error). Recover via a line-buffered tee (`open(...,buffering=1)`)
   or `PYTHONUNBUFFERED=1`.
 - **Post-training SIGTERM**: `rvc/train/train.py` ends with `os._exit(...)` which orphans its persistent DataLoader workers; their teardown signals the launcher's process group (session leader via `setsid`) -> spurious SIGTERM. In single-process, `_handle_terminate` ignores SIGTERM (Cmd+Q still quits via `applicationShouldTerminate_`).
-- **Frozen module importability**: modules NOT in PyInstaller's traced graph (e.g. `rvc.lib.tools.process_log_parser` - nothing imports it) ship as DATA in `Contents/Resources`, NOT importable modules in `Contents/Frameworks`. A `from rvc... import ...` works in dev, fails (ImportError) frozen. Inline what you need into fork-owned code, or add to HIDDEN_IMPORTS. Check: `find dist/Applio.app/Contents/Frameworks -path "*<module>*"` (absent = not importable).
+- **Frozen module importability**: a module is importable in the frozen app only when it is in
+  the PYZ embedded in `Contents/MacOS/Applio` (10,719 modules on 2026-11-26). `rvc/`, `assets/`
+  and `tabs/` are also shipped as data files, so a file's presence proves nothing. Check the PYZ:
+  `CArchiveReader(exe).extract("PYZ.pyz")`, write it to a temp file, read `ZlibArchiveReader(path).toc`.
+  `rvc.lib.tools.process_log_parser` is in HIDDEN_IMPORTS and importable; `rvc.infer.worker` and
+  `rvc.lib.tools.applio_paths` are data only. If something must be importable that is not: inline
+  it into fork-owned code or add it to HIDDEN_IMPORTS (a `from rvc... import ...` of a data-only
+  module works in dev and fails frozen).
 - **Reproduce frozen-subprocess behavior without the GUI:** `dist/Applio.app/Contents/MacOS/Applio
   /tmp/script.py args` - entry `applio_launcher.py` dispatches to the script (CWD=bundle).
+- **Testing the frozen app without touching the owner's data:**
+  - `APPLIO_DATA_PATH=<test folder>` pins the data location for one run. Seed it with a clone
+    of `rvc/models` (`cp -cR rvc/models <folder>/rvc/`). Drivers are in git-ignored
+    `.claude/port-tools/`: `applio_port_frozen_driver.py` (`Applio <script> <DATA> <phases>`;
+    env `SYNC_MODEL`, `SYNC_TOTAL_EPOCH`, `SYNC_LEGACY_PAIR`), `applio_sync_infer_driver.py`,
+    `applio_sync_gui_check.py`, `applio_sync_web_check.py`, `applio_sync_live_sample.py`.
+  - Every frozen start still rewrites `~/.applio/runtime_paths.json` AND
+    `~/Library/Application Support/Applio/runtime_paths.json`: back both up, restore after.
+  - A script-mode driver must not import tab modules: translations are copied into the data
+    location only by the GUI start.
+  - Clean-quit test: start with `open -n --env "APPLIO_DATA_PATH=…" dist/Applio.app`, quit with
+    `NSRunningApplication.terminate()` (PyObjC). Started from a shell the launcher is a session
+    leader, so a normal quit logs "Graceful shutdown timeout, sending SIGKILL" after 5 s; SIGTERM
+    is ignored by design.
+  - A11y payload without VoiceOver: headless Chromium (playwright, temp venv) against the running
+    app checks JS errors, `#applio-a11y-live`, polling and the 13 Browse buttons.
 - `ps -E -p <pid>` (macOS) dumps a frozen process's env - check inherited `APPLIO_*`/`PATH`.
 
 **Build process gotchas:**
@@ -752,8 +785,8 @@ kwargs; WITHOUT it the FROZEN app's converted outputs never load in the UI (grad
 cwd+temp; frozen cwd is the bundle → InvalidPathError in postprocess). **Frozen-safe enrichment
 rule:** launcher-side metrics use `_last_training_metrics` (seek-tail + backwards
 `_parse_training_log_line`) and `applio_inference_stats` (bundled) — NEVER
-`applio_progress_api.enrich_jobs`, which imports `rvc.lib.tools.process_log_parser` (ships only as
-a DATA file in the frozen bundle, not importable from the launcher). Menu: `_merged_live_procs` is
+`applio_progress_api.enrich_jobs`, which imports `rvc.lib.tools.process_log_parser` (it was
+data-only before the fork added it to HIDDEN_IMPORTS; the launcher keeps its own helpers). Menu: `_merged_live_procs` is
 the ONE merge (subprocess jobs + synthesized inference batch) for the menu AND both dashboard merge
 sites; `_menu_job_title` renders live titles (name capped 30 chars, line 64); the submenu
 skip-rebuild guard requires titles unchanged AND parent isEnabled() (a titles-only skip leaves the
