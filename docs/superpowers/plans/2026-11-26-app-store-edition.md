@@ -4,139 +4,141 @@
 
 **Goal:** Build a Mac App Store edition of Applio for macOS from the same sources as the direct-download edition, with the App Sandbox on, and submit it to App Store Connect.
 
-**Architecture:** `build_macos.py --store` switches the build: store entitlements, store-only patchers in `patches/store/`, store signing, output in `dist-store/`. The edition is written into `build_info.json`, and fork-owned code asks `applio_edition.store_edition()` wherever behaviour differs (data location, bookmarks, menu, download prompt). The direct-download edition keeps its build and its behaviour.
+**Architecture:** `build_macos.py --store` switches the build: store entitlements, store-only patchers in `patches/store/`, store signing, output in `dist-store/`. The edition is written into `build_info.json`, and fork-owned code asks `applio_edition.store_edition()` wherever behaviour differs (data location, bookmarks, menu, model downloads). The direct-download edition keeps its build and its behaviour, with one deliberate correction: the minimum macOS version in its Info.plist is computed from the bundle instead of being hand-written.
 
-**Tech Stack:** Python 3.12, PyInstaller 6.22, PyObjC (AppKit, Foundation), pytest, `codesign`, `xcrun altool`, Xcode 27.2.
+**Tech Stack:** Python 3.12, PyInstaller 6.22, PyObjC (AppKit, Foundation, Security), pytest, `codesign`, `xcrun altool`, Xcode 27.2.
 
 **Spec:** `docs/APP_STORE_READINESS.md`
 
-**When to run it:** after the owner's manual test pass of 3.7.2.1 and the 3.7.2.1 release, and only on the owner's word ("start the store edition").
+**When to run it:** now, on the owner's word of 2026-11-26 ("after compaction, start the store edition"), in a worktree on the branch `store-edition`. The 3.7.2.1 release has priority: when the owner's manual test results arrive (they test on 2026-11-27), leave this plan, switch to `main`, and handle the release first.
 
 ## Global Constraints
 
 - **Upstream files are never edited in the repository.** A change to upstream code is a patcher in `patches/store/`, applied only by `--store`, with markers in `PATCH_MARKERS_STORE`. A change to fork-owned code is an `if store_edition():` branch.
-- **The direct-download edition must not change.** `build_macos.py --sign --notarize --dmg` produces what it produced before. The unit tests pass (`venv_macos/bin/python -m pytest -q tests`), and black is clean on changed fork-owned files (`venv_macos/bin/python -m black --check <files>`).
-- **A store build never writes into `dist/`.** It writes into `dist-store/`. The build under test and the release disk image live in `dist/`.
+- **The direct-download edition does not change, with one exception.** `build_macos.py --sign --notarize --dmg` produces what it produced before, except that `LSMinimumSystemVersion` is now the real floor of the bundle (the bundle of 3.7.2.1 says 12.0 and needs 15.0: `orjson` is built for macOS 15.0 and 113 other binaries for 14.0). The unit tests pass (`venv_macos/bin/python -m pytest -q tests`), and black is clean on changed fork-owned files (`venv_macos/bin/python -m black --check <files>`).
+- **A store build never writes into `dist/`.** It writes into `dist-store/`. The build under test and the release disk image live in `dist/` of the main checkout.
 - **Nothing is uploaded to App Store Connect without the owner's explicit word.** The same rule as for GitHub releases.
-- **Until the owner's App ID exists, store test builds use the throwaway bundle id `com.iahispano.applio.storetest`.** Its container is `~/Library/Containers/com.iahispano.applio.storetest`.
-- **Frozen builds are tested on copies** (`cp -cR dist-store/Applio.app .claude/store/X.app`), never by editing the build itself. An edited copy is re-signed ad hoc before its first launch. Test folders and containers are removed when the task is done; a subagent does not delete outside the repository, it reports what it left.
+- **Until the owner gives the bundle id string, store test builds use the throwaway bundle id `com.iahispano.applio.storetest`.** Its container is `~/Library/Containers/com.iahispano.applio.storetest`.
+- **In the store edition the data never lives inside the app's container.** It lives in a folder the user chose, on any disk (decision 4).
+- **Frozen builds are tested on copies** (`cp -cR dist-store/Applio.app .claude/store/X.app`), never by editing the build itself. An edited copy is re-signed ad hoc before its first launch. Test folders and containers are removed when the task is done; a subagent does not delete outside the repository, it reports what it left. `/Volumes/ssd/ai/applio` is the owner's data location: read only.
 - **`/usr/bin/open` stays.** It works under App Sandbox (tested 2026-11-26).
 - **Upstream's `sys.path.append(now_dir)` stays.** Nothing writes code into the data location once the Plugins page is gone, and the bundle comes first on `sys.path`.
-- **Line numbers below are those of commit 178db176** (the tree before this plan). The text anchors are what matters: a patcher fails with exit 2 when an anchor is not found exactly once.
+- **The store edition is expected to grow features of its own** (the owner: "significant work and additional features"). New code goes into fork-owned modules named `applio_*`, not into upstream files.
+- **Line numbers below are those of commit d5df92bb.** The text anchors are what matters: a patcher fails with exit 2 when an anchor is not found exactly once.
 - **VoiceOver:** checklists for the owner go inline in the message, complete, numbered, without tables.
 
 ## User decisions (already made)
 
-- "plan the app store edition" (2026-11-26): this plan. Implementation starts only on the owner's word.
-- Recommended order, given to the owner and not contradicted: manual test pass and the 3.7.2.1 release first, then the store edition.
-- "no new release on github yet": nothing is published without the owner's explicit word.
-- "run the experiment" and "measure" (2026-11-26): the App Sandbox experiment and the measurement were run on the owner's word. Training without worker processes is the accepted route (5 to 11 percent slower).
-- Never modify upstream files directly: use `patches/`.
+The owner's answers of 2026-11-26 to the eight questions of the assessment:
 
-## Decisions that wait for the owner (DECIDE list)
+- **Name and icon:** "we have iahispano authorisation." Applio and upstream's icon stay. Keep the authorisation where App Review can see it.
+- **Bundle id:** "my own bundle id, there is significant work and additional features to warrant a different bundle it". The id string itself has not been given yet: task 8 needs it.
+- **Copyleft parts:** "approved inclusion, it is my responsability". `soxr` and `edge-tts` stay and are named in the app.
+- **Data location:** the owner asked for a recommendation, with two requirements: the data must survive removing and reinstalling the app, and the user must be able to change it. The plan follows the recommendation given: a folder the user chooses, on any disk, with its bookmark kept in the login keychain so that a new installation finds the folder again (tasks 4 and 5).
+- **Real-time conversion:** the owner leans towards leaving it out of the first store version. The plan does that and keeps the cheap test of a pipe-based channel (task 7), for a later version.
+- **First download:** "no bundling of models; should be user selectable, 3gb is too big for a first download, and users might not need everything." The download is split into three parts, chosen by the user (task 6).
+- **Privacy policy:** on GitHub for now, later the owner's own website. One constant, `PRIVACY_POLICY_URL` in `applio_edition.py`.
+- **Minimum macOS version:** the owner asked for a recommendation. The bundle decides: the build computes the highest minimum among its binaries and writes it into the Info.plist (task 1). Today that is 15.0.
+- **Order:** "do the 3.7.2.1 release first. i will manually test tomorrow." "keep the dataset for now." "delete the empty folders" (done on 2026-11-26). "after compaction, start the store edition".
+- Standing: "no new release on github yet"; "run the experiment" and "measure" (training without worker processes is the accepted route); never modify upstream files directly, use `patches/`.
 
-Each one is open because only the owner, or upstream, can answer it. The plan's default is in brackets. A different answer changes only what the line says it changes.
+## Open with the owner
 
-1. **Name and icon** (guideline 4.1 (c)). Applio and its icon belong to IAHispano. Either IAHispano's written approval, or another name and icon. [Default: ask upstream first; build with `--app-name` and `--icon`, which default to today's values.] A different name would also need different wording inside the app, which is not in this plan.
-2. **Bundle id.** Today the app carries upstream's `com.iahispano.applio`. An id of the owner's lets both editions sit side by side, each with its own container, preferences and logs. [Default: the owner's own id, passed with `--bundle-id`.] Nothing else changes.
-3. **Copyleft parts.** `soxr` (LGPL) is used by inference and preprocessing and cannot simply be dropped. `edge-tts` (LGPL-3.0) is text to speech. [Default: accept `soxr` knowingly and name it in an acknowledgements text; text to speech stays.] Leaving text to speech out would remove one page in task 6. Not legal advice.
-4. **Data location.** [Default: inside the container, with "Set Data Location" for any other folder through a bookmark.] Only the container is possible without the bookmark work of task 5.
-5. **Real-time conversion.** `rvc/realtime/worker.py` runs a second process with process queues and events, which the sandbox is expected to deny. [Default: the first store version has no Realtime page (task 6); task 10 shows whether a pipe-based channel works, for a later version.]
-6. **First download.** [Default: a prompt, then the download of about 3 GB.] Bundling the conversion models (about 0.6 GB) into the app instead is more work and is not in this plan.
-7. **Privacy policy URL.** [Default: `https://froggeric.github.io/applio-macOS-native-app/privacy/`, a GitHub Pages page of the fork that the owner writes in task 9.] A different URL is one constant, `PRIVACY_POLICY_URL` in `applio_edition.py`.
-8. **Minimum macOS version.** [Default: 12.0, as today.] A higher version is one line in `build_macos.py`.
+1. The bundle id string (task 8).
+2. Whether the recommendation on the data location stands. If the owner prefers another way, tasks 4 and 5 change and nothing else.
+3. Whether macOS 15 as the floor stands. It is the bundle's own floor; raising it is one line, lowering it is not possible without changing dependencies.
 
 ## Review Focus
 
 Failure modes the tasks' tests do not reach on their own, most likely first:
 
-1. A data folder on an external disk, chosen once, must still be readable after a restart (task 5 round trip; task 7 step 7.9).
-2. "Not now" on the first-launch prompt: the app must start and say that conversion needs the models (task 6 tests the answer; task 7 step 7.7 looks at the app).
+1. After removing the app and its container and installing it again, the app must find the data folder by itself, or ask once, and never lose data (task 4 tests, task 5 tests, task 8 step 8.6).
+2. A first launch with "Not now", or without the optional parts: the app starts, and File, Download Models… completes the download later (task 6 tests, task 7 steps 7.6 and 7.9).
 3. A failing extraction must still be reported: the pools reported errors as warnings, and the serial loops keep those messages (task 2 test).
 4. `--store` with flags it cannot take must stop before anything is built (task 1 `tests/test_build_options.py`).
-5. A bookmark that no longer resolves (folder renamed, disk unplugged) must lead to the existing "not writable" dialog, not to a crash (task 5 test for a missing bookmark; task 7 step 7.10).
+5. The minimum macOS version in the Info.plist must equal the bundle's real floor, not a hand-written number (task 1 test of `minimum_macos_version`, task 8 step 8.9).
+6. Cancelling the first folder choice: the app asks again or quits; it never starts without a data location (task 5 tests).
 
 ## Files
 
 New:
 
-- `applio_edition.py`, fork-owned: reads the edition from `build_info.json`; `store_edition()`, `default_data_location()`, `prepare_for_sandbox()`, `PRIVACY_POLICY_URL`.
-- `build_options.py`, fork-owned: argument checks of the build that need no build to run.
-- `applio_bookmarks.py`, fork-owned: security-scoped bookmark of the data location.
-- `applio_download_prompt.py`, fork-owned: the prompt before the first model download.
+- `applio_edition.py`, fork-owned: reads the edition from `build_info.json`; `store_edition()`, `prepare_for_sandbox()`, `PRIVACY_POLICY_URL`.
+- `build_options.py`, fork-owned: argument checks of the build and two pure helpers.
+- `applio_bookmarks.py`, fork-owned: the bookmark of the data location, kept in the container and in the login keychain.
+- `applio_data_location.py`, fork-owned: the decision which data location this run uses.
+- `applio_model_downloads.py`, fork-owned: which model parts to download, the dialog, the download.
 - `assets/entitlements_store.plist`: the sandbox entitlements.
 - `patches/store/store_patch_common.py` and three patchers: pipeline, checkpoint loading, interface.
-- Tests: `tests/test_applio_edition.py`, `tests/test_build_options.py`, `tests/test_store_patchers.py`, `tests/test_applio_bookmarks.py`, `tests/test_applio_download_prompt.py`, `tests/test_menu_edition.py`.
+- Tests: `tests/test_applio_edition.py`, `tests/test_build_options.py`, `tests/test_store_patchers.py`, `tests/test_applio_bookmarks.py`, `tests/test_applio_data_location.py`, `tests/test_applio_model_downloads.py`, `tests/test_menu_edition.py`.
 - `.claude/store/tools/pipe_channel_probe.py` (git-ignored local tool).
 
 Modified:
 
-- `build_macos.py`: `--store` and its companions, store patch list, Info.plist, signing, `build_info.json`, the flagged scheme string.
+- `build_macos.py`: `--store` and its companions, store patch list, Info.plist, signing, `build_info.json`, the computed minimum macOS version, the flagged scheme string.
 - `menu_spec.py`, `applio_launcher.py`, `macos_wrapper.py`, `applio_native_picker.py`: edition branches.
-- `HIDDEN_IMPORTS` in `build_macos.py`: the three new fork modules.
+- `HIDDEN_IMPORTS` in `build_macos.py`: the four new fork modules, each added by the task that creates it.
 - `.gitignore`: `dist-store/`.
 - `README_MACOS.md`, `FORK_DIFFERENCES.md`, `CHANGELOG.md`, `CLAUDE.md`, `docs/ROADMAP.md`.
 
 ---
-
 ### Task 0: Prerequisites
 
-**Goal:** Have the branch, the checkout and the decisions ready before any code changes.
+**Goal:** Have the worktree and a green baseline before any code changes, and know that the 3.7.2.1 release comes first.
 
 **Files:**
 - Read: `docs/APP_STORE_READINESS.md`, `CLAUDE.md` ("Fork Maintenance", "Build process gotchas")
 
 **Acceptance Criteria:**
-- [ ] The owner has answered decisions 1 to 8 of the DECIDE list, or accepted the defaults.
-- [ ] The manual test pass of 3.7.2.1 has a result and the 3.7.2.1 release is out, or the owner said to start anyway.
-- [ ] A worktree exists for a branch `store-edition`, created with the native worktree tool.
+- [ ] A worktree exists for a branch `store-edition` from `main`, created with the native worktree tool.
 - [ ] The baseline is green in the worktree.
+- [ ] The owner's test results of 3.7.2.1, when they arrive, are handled on `main` before this plan goes on.
 
 **Verify:** `venv_macos/bin/python -m pytest -q tests` in the worktree → `118 passed` (or more; none failed)
 
 **Steps:**
 
-- [ ] **Step 1: Record the decisions**
-
-Write the answers into the "User decisions (already made)" section of this plan, one line each, before task 1 starts.
-
-- [ ] **Step 2: Create the worktree**
+- [ ] **Step 1: Create the worktree**
 
 Use the worktree tool of the session on a new branch `store-edition` from `main`. Do not work in the main checkout: its `dist/` holds the build under test.
 
-- [ ] **Step 3: Run the baseline**
+- [ ] **Step 2: Run the baseline**
 
 ```bash
 cd <worktree>
 /Volumes/ssd/github/applio-macOS-native-app/venv_macos/bin/python -m pytest -q tests
 ```
 
-The worktree has no `venv_macos` of its own (it is git-ignored). Every command in this plan that says `venv_macos/bin/python` means that absolute interpreter, run from the worktree.
+The worktree has no `venv_macos` of its own (it is git-ignored). Every command in this plan that says `venv_macos/bin/python` means that absolute interpreter, run from the worktree. `.claude/port-tools` is local to the main checkout too: copy the folder when a step needs one of its tools.
 
-- [ ] **Step 4: Note where the models are**
+- [ ] **Step 3: Note where the models are**
 
 The worktree has no `rvc/models` (git-ignored, 7.1 GB). Builds and tests clone what they need from `/Volumes/ssd/github/applio-macOS-native-app/rvc/models` with `cp -cR` (same volume: no extra space).
 
----
+- [ ] **Step 4: The rule of priority**
 
+When the owner sends the results of the manual pass of 3.7.2.1: commit or stash the work in the worktree, switch to the main checkout, and handle the release (triage, fix, rebuild, notarize, and on their word the tag and the upload). Come back to this plan afterwards.
+
+---
 ### Task 1: Edition switch in the build
 
-**Goal:** `build_macos.py --store` produces an app with the sandbox entitlements, signed ad hoc, in `dist-store/`, with `edition: store` in `build_info.json`, and leaves the direct build as it was.
+**Goal:** `build_macos.py --store` produces an app with the sandbox entitlements, signed ad hoc, in `dist-store/`, with `edition: store` in `build_info.json`; the direct build stays as it was; and both get the minimum macOS version their binaries really need.
 
 **Files:**
 - Create: `applio_edition.py`, `build_options.py`, `assets/entitlements_store.plist`
 - Create: `tests/test_applio_edition.py`, `tests/test_build_options.py`
-- Modify: `build_macos.py` (argument parser near line 128-202, the constants read from `args` near 204-215, `pyinstaller_args` near 716, `HIDDEN_IMPORTS` near 606, `pre_build_patch` near 996, `_check_patch_table` near 950, `verify_patch_markers` near 1340, the `build_info.json` writer near 1375, the Info.plist block near 1518-1536, `sign_app` near 1661)
+- Modify: `build_macos.py` (argument parser near line 128-202, the constants read from `args` near 204-215, `pyinstaller_args` near 716, `HIDDEN_IMPORTS` near 606, `pre_build_patch` near 996, `_check_patch_table` near 950, `verify_patch_markers` near 1340, the `build_info.json` writer near 1375, the Info.plist block near 1518-1536, `sign_app` near 1661 and its call near 1825)
 - Modify: `.gitignore`
 
 **Acceptance Criteria:**
 - [ ] `--store --notarize`, `--store --dmg`, `--store --sign` without a profile, and `--provisioning-profile` without `--sign` each stop with a message before anything is built.
 - [ ] `applio_edition.store_edition()` is `False` without `build_info.json`, `False` with `"edition": "direct"`, `True` with `"edition": "store"`.
-- [ ] The default data location is `~/Applio` in the direct edition and `~/Library/Application Support/Applio/data` in the store edition.
-- [ ] After `build_macos.py --store --bundle-id com.iahispano.applio.storetest`: `dist-store/Applio.app` exists, `dist/` is untouched, `build_info.json` has `"edition": "store"`, the signature carries `com.apple.security.app-sandbox`.
+- [ ] `minimum_macos_version(["11.0", "12.1", "14.0", "15.0", "13.3"])` is `"15.0"`.
+- [ ] After `build_macos.py --store --bundle-id com.iahispano.applio.storetest`: `dist-store/Applio.app` exists, `dist/` is untouched, `build_info.json` has `"edition": "store"`, the signature carries `com.apple.security.app-sandbox`, the Info.plist has the category and the encryption key.
+- [ ] The Info.plist of that build names `15.0` as `LSMinimumSystemVersion` (the highest minimum among its binaries today).
 - [ ] A build without `--store` in the worktree gives the same entitlements as before and `"edition": "direct"`.
 
-**Verify:** `venv_macos/bin/python -m pytest -q tests/test_applio_edition.py tests/test_build_options.py` → all pass; then the build commands in step 9.
+**Verify:** `venv_macos/bin/python -m pytest -q tests/test_applio_edition.py tests/test_build_options.py` → `16 passed`; then the build commands of steps 20 and 21.
 
 **Steps:**
 
@@ -149,7 +151,6 @@ The worktree has no `rvc/models` (git-ignored, 7.1 GB). Builds and tests clone w
 
 import json
 import mimetypes
-import os
 
 import applio_edition
 
@@ -167,15 +168,11 @@ def _edition_with(monkeypatch, tmp_path, info):
 def test_direct_edition(monkeypatch, tmp_path):
     edition = _edition_with(monkeypatch, tmp_path, {"edition": "direct"})
     assert edition.store_edition() is False
-    assert edition.default_data_location() == os.path.expanduser("~/Applio")
 
 
 def test_store_edition(monkeypatch, tmp_path):
     edition = _edition_with(monkeypatch, tmp_path, {"edition": "store"})
     assert edition.store_edition() is True
-    assert edition.default_data_location() == os.path.expanduser(
-        "~/Library/Application Support/Applio/data"
-    )
 
 
 def test_missing_build_info_is_the_direct_edition(monkeypatch, tmp_path):
@@ -197,6 +194,12 @@ def test_corrupt_build_info_is_the_direct_edition(monkeypatch, tmp_path):
     )
     applio_edition.store_edition.cache_clear()
     assert applio_edition.store_edition() is False
+
+
+def test_the_privacy_policy_is_on_github_for_now():
+    assert applio_edition.PRIVACY_POLICY_URL == (
+        "https://froggeric.github.io/applio-macOS-native-app/privacy/"
+    )
 
 
 def test_prepare_for_sandbox_clears_the_mime_type_files_in_the_store_edition(
@@ -247,17 +250,13 @@ import json
 import os
 import sys
 
-# Decision 7 of docs/APP_STORE_READINESS.md. The page must exist before the
-# app is submitted (guideline 5.1.1 (i)).
+# Decision 7 of docs/APP_STORE_READINESS.md: on GitHub for now, later the
+# owner's own website. Only this line changes then.
 PRIVACY_POLICY_URL = "https://froggeric.github.io/applio-macOS-native-app/privacy/"
 
 
-def _frozen_base():
-    return getattr(sys, "_MEIPASS", None)
-
-
 def _build_info_candidates():
-    frozen_base = _frozen_base()
+    frozen_base = getattr(sys, "_MEIPASS", None)
     if not frozen_base:
         return []
     resources = os.path.join(
@@ -284,17 +283,6 @@ def store_edition() -> bool:
     return _read_build_info().get("edition") == "store"
 
 
-def default_data_location() -> str:
-    """Where the data lives when the user never chose a folder.
-
-    In the store edition that is inside the app's sandbox container: there
-    `~` resolves to the container, so the path needs no bookmark.
-    """
-    if store_edition():
-        return os.path.expanduser("~/Library/Application Support/Applio/data")
-    return os.path.expanduser("~/Applio")
-
-
 def prepare_for_sandbox() -> None:
     """Call before Gradio is first imported. Store edition only.
 
@@ -312,14 +300,14 @@ def prepare_for_sandbox() -> None:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `venv_macos/bin/python -m pytest -q tests/test_applio_edition.py`
-Expected: `6 passed`
+Expected: `7 passed`
 
-- [ ] **Step 5: Write the failing tests for the argument checks**
+- [ ] **Step 5: Write the failing tests for the build helpers**
 
 `tests/test_build_options.py`:
 
 ```python
-"""build_options: what --store may and may not be combined with."""
+"""build_options: checks and helpers of build_macos.py that need no build."""
 
 import build_options
 
@@ -356,6 +344,15 @@ def test_flagged_scheme_is_replaced_byte_for_byte():
     assert build_options.replace_flagged_scheme(
         b"'ws', 'wss', 'itms-services']"
     ) == b"'ws', 'wss', 'x-itms-servic']"
+
+
+def test_minimum_macos_version_is_the_highest_one():
+    versions = ["11.0", "12.1", "14.0", "15.0", "13.3"]
+    assert build_options.minimum_macos_version(versions) == "15.0"
+
+
+def test_minimum_macos_version_of_nothing():
+    assert build_options.minimum_macos_version([]) == "0.0.0"
 ```
 
 - [ ] **Step 6: Run them and see them fail**
@@ -366,10 +363,10 @@ Expected: collection error, `No module named 'build_options'`.
 - [ ] **Step 7: Create `build_options.py`**
 
 ```python
-"""Checks on the options of build_macos.py that need no build to run.
+"""Checks and helpers of build_macos.py that need no build to run.
 
-build_macos.py runs the whole build when it is imported, so its argument
-checks live here where the tests can import them.
+build_macos.py runs the whole build when it is imported, so what the tests
+need to import lives here.
 """
 
 FLAGGED_SCHEME = b"itms-services"
@@ -403,12 +400,26 @@ def replace_flagged_scheme(data: bytes) -> bytes:
     bundled modules that name the scheme (task 8).
     """
     return data.replace(FLAGGED_SCHEME, SAFE_SCHEME)
+
+
+def minimum_macos_version(versions):
+    """The highest macOS version among those the bundle's binaries need.
+
+    dyld refuses to load a binary built for a newer system than the one it
+    runs on, so this, and nothing lower, belongs in LSMinimumSystemVersion.
+    """
+    highest = (0, 0, 0)
+    for version in versions:
+        numbers = tuple(int(part) for part in str(version).split(".")[:3])
+        numbers += (0,) * (3 - len(numbers))
+        highest = max(highest, numbers)
+    return ".".join(str(number) for number in highest)
 ```
 
 - [ ] **Step 8: Run them and see them pass**
 
 Run: `venv_macos/bin/python -m pytest -q tests/test_build_options.py`
-Expected: `7 passed`
+Expected: `9 passed`
 
 - [ ] **Step 9: Create `assets/entitlements_store.plist`**
 
@@ -454,18 +465,6 @@ In `parse_args()`, before `return parser.parse_args()`:
         "Without --sign the app is signed ad hoc (local sandbox tests).",
     )
     parser.add_argument(
-        "--app-name",
-        type=str,
-        default=None,
-        help="App name of the bundle (default: Applio; store edition, decision 1)",
-    )
-    parser.add_argument(
-        "--icon",
-        type=str,
-        default=None,
-        help="Icon file of the bundle (default: assets/ICON.ico)",
-    )
-    parser.add_argument(
         "--bundle-id",
         type=str,
         default="com.iahispano.applio",
@@ -487,8 +486,6 @@ After `KEYCHAIN_PROFILE = args.keychain_profile` (near line 215):
 from build_options import option_problems  # noqa: E402
 
 STORE_BUILD = args.store
-APP_NAME = args.app_name or "Applio"
-ICON_FILE = args.icon or "assets/ICON.ico"
 BUNDLE_ID = args.bundle_id
 PROVISIONING_PROFILE = args.provisioning_profile
 DIST_DIR = "dist-store" if STORE_BUILD else "dist"
@@ -503,16 +500,7 @@ if STORE_BUILD:
     ENTITLEMENTS_PATH = "assets/entitlements_store.plist"
 ```
 
-In `pyinstaller_args`:
-
-```python
-        f"--name={APP_NAME}",
-        ...
-        f"--icon={ICON_FILE}",
-        ...
-        f"--osx-bundle-identifier={BUNDLE_ID}",
-        f"--distpath={DIST_DIR}",
-```
+In `pyinstaller_args`: `f"--osx-bundle-identifier={BUNDLE_ID}"`, and add `f"--distpath={DIST_DIR}"` after it.
 
 Replace the six `"dist"` literals of the normal build path with `DIST_DIR`: in the `build_info_path` assignment (near 1377), in `clean_bundled_models` (1399), in `post_build_cleanup` (1455 and 1456), in `app_path` and the Info.plist path (1483 and 1484). Leave the literals of the models installer (426), of the disk image (1859 to 1869) and of the notarization (2081): `option_problems` makes the last two unreachable for store builds.
 
@@ -532,9 +520,9 @@ After `plist["LSMultipleInstancesProhibited"] = True`:
         if STORE_BUILD:
             plist["LSApplicationCategoryType"] = "public.app-category.music"
             plist["ITSAppUsesNonExemptEncryption"] = False
-            if args.app_name:
-                plist["CFBundleDisplayName"] = args.app_name
 ```
+
+The line `plist["LSMinimumSystemVersion"] = "12.0.0"` further up stays as the fallback; step 16 writes the real value before signing.
 
 - [ ] **Step 13: Sign the store edition inside-out**
 
@@ -666,27 +654,72 @@ In `pre_build_patch()`, after the `patches_to_apply = [...]` list and before `_c
 
 In `_check_patch_table`: replace `set(PATCH_MARKERS)` with `set(active_patch_markers())` (both lines). In `verify_patch_markers`: `for patcher_path, markers in active_patch_markers().items():`.
 
-- [ ] **Step 15: Make the new fork modules importable in the frozen app**
+- [ ] **Step 15: Make the edition reader importable in the frozen app**
 
 In `HIDDEN_IMPORTS`, add:
 
 ```python
     "applio_edition",
-    "applio_bookmarks",
-    "applio_download_prompt",
 ```
 
-- [ ] **Step 16: Ignore the store output**
+- [ ] **Step 16: Compute the minimum macOS version of the bundle**
+
+The Info.plist said 12.0.0 by hand. The bundle of 3.7.2.1 cannot start there: `orjson` is built for macOS 15.0, 113 other binaries for 14.0, and dyld refuses to load them on an older system. Both editions get the real number.
+
+In `build_macos.py`, after `_discover_macho` (so it can use it):
+
+```python
+def bundle_minimum_macos_version():
+    """The highest `minos` among the app's Mach-O files, as "X.Y" or "X.Y.Z"."""
+    highest = (0,)
+    for binary in _discover_macho(app_path):
+        info = subprocess.run(
+            ["otool", "-l", binary], capture_output=True, text=True
+        )
+        lines = info.stdout.splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() != "cmd LC_BUILD_VERSION":
+                continue
+            for field in lines[index + 1 : index + 6]:
+                if field.strip().startswith("minos"):
+                    numbers = tuple(int(p) for p in field.split()[1].split("."))
+                    highest = max(highest, numbers)
+    return ".".join(str(number) for number in highest) or None
+
+
+def set_minimum_macos_version():
+    """Write the bundle's real floor into Info.plist, before signing."""
+    import build_options
+
+    version = build_options.minimum_macos_version(
+        [found for found in [bundle_minimum_macos_version()] if found]
+    )
+    if version in (None, "0.0.0"):
+        print("WARNING: no LC_BUILD_VERSION found; LSMinimumSystemVersion left as it is")
+        return
+    with open(info_plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    plist["LSMinimumSystemVersion"] = version
+    with open(info_plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+    print(f"LSMinimumSystemVersion set to {version} (the bundle's highest minimum).")
+```
+
+`import plistlib` goes with the other imports. Immediately before `sign_success = sign_app()` (near line 1825):
+
+```python
+set_minimum_macos_version()
+```
+
+Change the comment above the hand-written `"12.0.0"` line to: `# Fallback only: set_minimum_macos_version() writes the bundle's real floor before signing.`
+
+- [ ] **Step 17: Ignore the store output**
 
 In `.gitignore`, next to `dist/`:
 
 ```
 dist-store/
 ```
-
-- [ ] **Step 17: Fix the summary of the build**
-
-In the final summary of `build_macos.py`, replace `Note: Models (~2GB) will download on first launch` by `about 3 GB`, and print `Edition: Mac App Store` when `STORE_BUILD`.
 
 - [ ] **Step 18: Run the tests and the checks of the direct edition**
 
@@ -696,39 +729,40 @@ venv_macos/bin/python -m black --check build_macos.py build_options.py applio_ed
 venv_macos/bin/python .claude/port-tools/applio_run_patch_stage.py .
 ```
 
-Expected: all tests pass, black leaves the files unchanged, the tool ends with `PATCH STAGE OK`. (`applio_run_patch_stage.py` is a local tool of the main checkout; when the worktree has no `.claude/port-tools`, copy the folder from the main checkout.)
+Expected: all tests pass, black leaves the files unchanged, the tool ends with `PATCH STAGE OK`.
 
 - [ ] **Step 19: Build the store edition ad hoc and check it**
 
 ```bash
 venv_macos/bin/python build_macos.py --store --bundle-id com.iahispano.applio.storetest > .claude/store-build.log 2>&1
-tail -5 .claude/store-build.log
+grep -E "LSMinimumSystemVersion set|BUILD COMPLETE" .claude/store-build.log
 plutil -p dist-store/Applio.app/Contents/Resources/build_info.json
+plutil -p dist-store/Applio.app/Contents/Info.plist | grep -E "LSMinimumSystemVersion|LSApplicationCategoryType|ITSAppUsesNonExemptEncryption"
 codesign -d --entitlements :- dist-store/Applio.app 2>/dev/null | grep -c app-sandbox
 ls dist
 ```
 
-Expected: the log ends with `BUILD COMPLETE`; the plist shows `"edition" => "store"`; the grep prints `1`; `ls dist` shows nothing new (or nothing, in the worktree).
+Expected: `LSMinimumSystemVersion set to 15.0`; `BUILD COMPLETE`; `"edition" => "store"`; `"LSMinimumSystemVersion" => "15.0"`, the category `public.app-category.music`, the encryption key `false`; the grep prints `1`; `ls dist` shows nothing new (or nothing, in the worktree).
 
 - [ ] **Step 20: Build the direct edition in the worktree and compare**
 
 ```bash
 venv_macos/bin/python build_macos.py > .claude/direct-build.log 2>&1
 plutil -p dist/Applio.app/Contents/Resources/build_info.json
-codesign -d --entitlements :- dist/Applio.app 2>/dev/null | grep -c app-sandbox
+plutil -p dist/Applio.app/Contents/Info.plist | grep LSMinimumSystemVersion
+codesign -d --entitlements :- dist/Applio.app 2>/dev/null | grep -A1 app-sandbox
 ```
 
-Expected: `"edition" => "direct"` and `0` (the sandbox key is false in `assets/entitlements.plist`, so the count is 0 or the key appears with `false`: check with `codesign -d --entitlements :- dist/Applio.app` that the entitlements are those of `assets/entitlements.plist`).
+Expected: `"edition" => "direct"`; `"LSMinimumSystemVersion" => "15.0"` (the one intended difference); the sandbox key of `assets/entitlements.plist` (`false`), and otherwise the entitlements of that file.
 
 - [ ] **Step 21: Commit**
 
 ```bash
 git add applio_edition.py build_options.py assets/entitlements_store.plist build_macos.py .gitignore tests/test_applio_edition.py tests/test_build_options.py
-git commit -m "build: add --store for the Mac App Store edition"
+git commit -m "build: add --store for the Mac App Store edition and compute the minimum macOS version"
 ```
 
 ---
-
 ### Task 2: Pipeline without worker processes
 
 **Goal:** In the store edition, preprocessing, extraction and training run without worker processes, which the sandbox denies.
@@ -1402,33 +1436,626 @@ git commit -m "store: load model checkpoints as data only"
 
 ---
 
-### Task 4: Wrapper in the sandbox
+### Task 4: The bookmark of the data location
 
-**Goal:** The store edition starts in the sandbox without the folder prompt, keeps its data in the container, imports Gradio, and copies no Python file into the data location.
+**Goal:** Keep access to a data folder outside the app's container across launches, and across removing and reinstalling the app.
+
+**Why:** The data lives in a folder the user chose (decision 4). The sandbox grants access through the folder picker for one session; a security-scoped bookmark keeps it. The bookmark is kept in two places: in the app's container, which macOS may remove together with the app, and in the login keychain, which stays.
 
 **Files:**
-- Modify: `macos_wrapper.py` (`start_gui`, the data-location block near line 2030-2046; `start_backend` near 1576; `setup_bundled_resources`, inner `copy_file`, near 923)
-- Test: `tests/test_applio_edition.py` (already covers the defaults)
+- Create: `applio_bookmarks.py`
+- Create: `tests/test_applio_bookmarks.py`
+- Modify: `build_macos.py` (`HIDDEN_IMPORTS`)
 
 **Acceptance Criteria:**
-- [ ] In the store edition a start without a saved location does not open the folder prompt and uses `default_data_location()`.
-- [ ] `mimetypes.knownfiles` is `[]` before `from app import launch_gradio` runs, in the store edition only.
-- [ ] After a store start, the data location contains no `.py` file.
-- [ ] The direct edition still opens the prompt on first run and still copies the tab scripts.
+- [ ] A bookmark saved for a folder resolves back to that folder (path comparison after `os.path.realpath`).
+- [ ] `resolve_saved` returns the folder only when the bookmark leads to the saved location.
+- [ ] `resolve_remembered` reads the keychain first and the file second.
+- [ ] `save` writes the same bytes to the file and to the keychain.
+- [ ] A keychain that cannot be reached is logged and never raises.
+- [ ] A folder that does not exist gets no bookmark.
 
-**Verify:** task 7 steps 7.2 to 7.5 run the frozen app; here: `venv_macos/bin/python -c "import macos_wrapper"` → no output, exit 0 (the module stays free of side effects at import).
+**Verify:** `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py` → `9 passed`
 
 **Steps:**
 
-- [ ] **Step 1: Import the edition helper**
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_applio_bookmarks.py`. The tests never touch the owner's keychain: the two keychain functions are replaced, and one test makes the keychain fail on purpose.
+
+```python
+"""applio_bookmarks: a saved folder resolves back to the same folder."""
+
+import os
+
+import pytest
+
+import applio_bookmarks
+
+
+@pytest.fixture(autouse=True)
+def keychain_replaced(monkeypatch):
+    """No test reads or writes the real keychain."""
+    calls = []
+    monkeypatch.setattr(applio_bookmarks, "read_keychain", lambda: None)
+    monkeypatch.setattr(
+        applio_bookmarks, "write_keychain", lambda data: calls.append(data) or True
+    )
+    return calls
+
+
+def _store(tmp_path):
+    return str(tmp_path / "support" / "data_location.bookmark")
+
+
+def test_bookmark_round_trip(tmp_path):
+    folder = tmp_path / "data location"
+    folder.mkdir()
+    store_at = _store(tmp_path)
+
+    assert applio_bookmarks.save(str(folder), store_at) is True
+
+    resolved = applio_bookmarks.resolve_saved(str(folder), store_at)
+    assert resolved is not None
+    assert os.path.realpath(resolved) == os.path.realpath(str(folder))
+
+
+def test_resolve_saved_rejects_another_location(tmp_path):
+    folder = tmp_path / "data location"
+    folder.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    store_at = _store(tmp_path)
+    assert applio_bookmarks.save(str(folder), store_at)
+
+    assert applio_bookmarks.resolve_saved(str(other), store_at) is None
+
+
+def test_resolve_remembered_falls_back_to_the_file(tmp_path):
+    folder = tmp_path / "data location"
+    folder.mkdir()
+    store_at = _store(tmp_path)
+    assert applio_bookmarks.save(str(folder), store_at)
+
+    resolved = applio_bookmarks.resolve_remembered(store_at)
+
+    assert os.path.realpath(resolved) == os.path.realpath(str(folder))
+
+
+def test_resolve_remembered_prefers_the_keychain(tmp_path, monkeypatch):
+    in_keychain = tmp_path / "from keychain"
+    in_file = tmp_path / "from file"
+    in_keychain.mkdir()
+    in_file.mkdir()
+    at_file = _store(tmp_path)
+    assert applio_bookmarks.save(str(in_file), at_file)
+    in_memory = applio_bookmarks._create(str(in_keychain))
+    monkeypatch.setattr(applio_bookmarks, "read_keychain", lambda: in_memory)
+
+    resolved = applio_bookmarks.resolve_remembered(at_file)
+
+    assert os.path.realpath(resolved) == os.path.realpath(str(in_keychain))
+
+
+def test_save_keeps_the_same_bytes_in_the_keychain(tmp_path, keychain_replaced):
+    folder = tmp_path / "data location"
+    folder.mkdir()
+    store_at = _store(tmp_path)
+
+    assert applio_bookmarks.save(str(folder), store_at)
+
+    with open(store_at, "rb") as f:
+        assert keychain_replaced == [f.read()]
+
+
+def test_a_missing_bookmark_resolves_to_nothing(tmp_path):
+    assert applio_bookmarks.resolve_saved("/nowhere", str(tmp_path / "none")) is None
+    assert applio_bookmarks.resolve_remembered(str(tmp_path / "none")) is None
+
+
+def test_the_bookmark_lives_in_application_support():
+    assert applio_bookmarks.bookmark_path() == os.path.expanduser(
+        "~/Library/Application Support/Applio/data_location.bookmark"
+    )
+
+
+def test_a_folder_that_does_not_exist_gets_no_bookmark(tmp_path):
+    store_at = _store(tmp_path)
+
+    assert applio_bookmarks.save(str(tmp_path / "missing"), store_at) is False
+    assert not os.path.exists(store_at)
+
+
+def test_a_keychain_that_cannot_be_reached_is_logged_not_raised(
+    tmp_path, monkeypatch, caplog
+):
+    def broken():
+        raise RuntimeError("no keychain here")
+
+    monkeypatch.setattr(applio_bookmarks, "_keychain_query", broken)
+
+    assert applio_bookmarks.read_keychain() is None
+    assert applio_bookmarks.write_keychain(b"x") is False
+    assert "Keychain" in caplog.text
+```
+
+- [ ] **Step 2: Run it and see it fail**
+
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py`
+Expected: collection error, `No module named 'applio_bookmarks'`; that is 9 tests that do not run.
+
+- [ ] **Step 3: Create `applio_bookmarks.py`**
+
+```python
+"""Security-scoped bookmark of the data location (Mac App Store edition).
+
+In the sandbox a folder outside the app's container is reachable through the
+folder picker for the session in which it was picked. A bookmark keeps that
+access across launches. It is kept twice:
+
+- in the app's Application Support folder, which is inside the container;
+- in the login keychain, which stays when the app and its container are
+  removed, so a new installation finds the folder again by itself.
+
+The keychain part needs a build signed with the owner's identity: an ad hoc
+signed test build may be refused or prompted for, and then only the file
+copy works. A failure there is logged, never raised.
+
+Importing this module has no side effects.
+"""
+
+import logging
+import os
+
+BOOKMARK_NAME = "data_location.bookmark"
+KEYCHAIN_ACCOUNT = "data_location"
+
+
+def bookmark_path() -> str:
+    return os.path.expanduser(
+        os.path.join("~/Library/Application Support/Applio", BOOKMARK_NAME)
+    )
+
+
+def _keychain_query():
+    from Foundation import NSBundle
+    from Security import (
+        kSecAttrAccount,
+        kSecAttrService,
+        kSecClass,
+        kSecClassGenericPassword,
+    )
+
+    bundle_id = NSBundle.mainBundle().bundleIdentifier() or "Applio"
+    return {
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: f"{bundle_id}.{KEYCHAIN_ACCOUNT}",
+        kSecAttrAccount: KEYCHAIN_ACCOUNT,
+    }
+
+
+def read_keychain() -> bytes | None:
+    """The bookmark an earlier installation left in the login keychain."""
+    from Security import SecItemCopyMatching, errSecSuccess, kSecReturnData
+
+    try:
+        status, data = SecItemCopyMatching(
+            {**_keychain_query(), kSecReturnData: True}, None
+        )
+    except Exception as error:  # no keychain available
+        logging.warning(f"[Bookmarks] Keychain not readable: {error}")
+        return None
+    if status != errSecSuccess or data is None:
+        return None
+    return bytes(data)
+
+
+def write_keychain(data: bytes) -> bool:
+    from Security import (
+        SecItemAdd,
+        SecItemUpdate,
+        errSecItemNotFound,
+        errSecSuccess,
+        kSecValueData,
+    )
+
+    try:
+        query = _keychain_query()
+        status, _ = SecItemUpdate(query, {kSecValueData: data})
+        if status == errSecItemNotFound:
+            status, _ = SecItemAdd({**query, kSecValueData: data}, None)
+    except Exception as error:  # no keychain available
+        logging.warning(f"[Bookmarks] Keychain not writable: {error}")
+        return False
+    if status != errSecSuccess:
+        logging.warning(f"[Bookmarks] Keychain item not saved (status {status}).")
+        return False
+    return True
+
+
+def _create(path):
+    """Bookmark bytes for `path`, or None."""
+    from Foundation import NSURL
+
+    if not os.path.exists(path):
+        logging.warning(f"[Bookmarks] Not a folder that exists: {path}")
+        return None
+    url = NSURL.fileURLWithPath_(path)
+    data, error = (
+        url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error_(
+            0, None, None, None
+        )
+    )
+    if data is None:
+        logging.warning(f"[Bookmarks] Could not create a bookmark for {path}: {error}")
+        return None
+    return bytes(data)
+
+
+def _resolve(data):
+    """Resolve bookmark bytes and start accessing the folder. Its path, or None.
+
+    The access stays on for the life of the process: a security-scoped
+    resource may be released only as often as it was started.
+    """
+    from Foundation import NSURL
+
+    url, stale, error = (
+        NSURL.URLByResolvingBookmarkData_options_relativeToURL_bookmarkDataIsStale_error_(
+            data, 0, None, None, None
+        )
+    )
+    if url is None:
+        logging.warning(f"[Bookmarks] Could not resolve the stored bookmark: {error}")
+        return None
+    url.startAccessingSecurityScopedResource()
+    return url.path()
+
+
+def _read_file(store_at):
+    try:
+        with open(store_at, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def save(path: str, store_at: str | None = None) -> bool:
+    """Make a bookmark for `path` and keep it in the file and the keychain."""
+    data = _create(path)
+    if data is None:
+        return False
+    store_at = store_at or bookmark_path()
+    os.makedirs(os.path.dirname(store_at), exist_ok=True)
+    with open(store_at, "wb") as f:
+        f.write(data)
+    write_keychain(data)
+    return True
+
+
+def resolve_saved(saved_path: str, store_at: str | None = None) -> str | None:
+    """The saved location, when a bookmark still reaches it. None otherwise."""
+    if not saved_path:
+        return None
+    store_at = store_at or bookmark_path()
+    data = _read_file(store_at)
+    if not data:
+        data = read_keychain()
+    if not data:
+        return None
+    path = _resolve(data)
+    if path and os.path.isdir(path):
+        if os.path.realpath(path) == os.path.realpath(saved_path):
+            return path
+    return None
+
+
+def resolve_remembered(store_at: str | None = None) -> str | None:
+    """Any location a bookmark still reaches: the keychain's, else the file's."""
+    store_at = store_at or bookmark_path()
+    data = read_keychain()
+    if not data:
+        data = _read_file(store_at)
+    if not data:
+        return None
+    return _resolve(data)
+```
+
+- [ ] **Step 4: Run the tests and see them pass**
+
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py`
+Expected: `9 passed`. If PyObjC raises a `TypeError` on the two `NSURL` calls, the installed PyObjC does not take `None` for the out parameters: drop the trailing `None` of `error:` (the returned tuples stay `(data, error)` and `(url, stale, error)`), then run again.
+
+- [ ] **Step 5: Register the module**
+
+In `HIDDEN_IMPORTS` (`build_macos.py`), add `"applio_bookmarks",` next to `"applio_edition",`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+venv_macos/bin/python -m pytest -q tests
+venv_macos/bin/python -m black --check applio_bookmarks.py build_macos.py tests/test_applio_bookmarks.py
+git add applio_bookmarks.py build_macos.py tests/test_applio_bookmarks.py
+git commit -m "store: keep the data location's bookmark in the app and in the login keychain"
+```
+
+---
+### Task 5: Data location: always a folder the user chose
+
+**Goal:** In the store edition the data lives in a folder the user chose, on any disk, and is found again after a restart and after a reinstall; cancelling the first choice asks again or quits.
+
+**Why:** Decision 4. The container goes when the app goes, so the data cannot live there. The location is the saved preference, then a bookmark of an earlier installation, then the user's choice.
+
+**Files:**
+- Create: `applio_data_location.py`
+- Create: `tests/test_applio_data_location.py`
+- Modify: `macos_wrapper.py` (imports; `start_gui`, the data-location block near line 2036-2046; a new `confirm_store_data_location` next to `confirm_data_location` near 616; `start_backend` near 1576; the inner `copy_file` of `setup_bundled_resources` near 923)
+- Modify: `applio_launcher.py` (`setDataLocation_`, near line 6505)
+- Modify: `build_macos.py` (`HIDDEN_IMPORTS`)
+
+**Acceptance Criteria:**
+- [ ] A saved location whose bookmark resolves is used without asking.
+- [ ] With nothing saved, a bookmark of an earlier installation restores the location and it becomes the saved one.
+- [ ] A first choice is saved in the preferences, marked as first run done, and gets its bookmark.
+- [ ] An unwritable choice asks again; cancelling asks again or quits; the function returns `None` when the user quits.
+- [ ] In the store edition Gradio is imported after the MIME-type fix, and no Python file is copied into the data location.
+- [ ] `setDataLocation_` saves a bookmark in the store edition.
+
+**Verify:** `venv_macos/bin/python -m pytest -q tests/test_applio_data_location.py` → `6 passed`; `venv_macos/bin/python -c "import macos_wrapper"` → no output, exit 0.
+
+**Steps:**
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_applio_data_location.py`:
+
+```python
+"""applio_data_location: which data location a run of the store edition uses."""
+
+import pytest
+
+import applio_data_location
+
+
+class FakePrefs:
+    def __init__(self, saved=None):
+        self.saved = saved
+        self.first_run_complete = False
+
+    def set_data_path(self, path):
+        self.saved = path
+
+    def mark_first_run_complete(self):
+        self.first_run_complete = True
+
+
+class FakeBookmarks:
+    def __init__(self, saved=None, remembered=None):
+        self.saved_result = saved
+        self.remembered_result = remembered
+        self.saved_paths = []
+
+    def resolve_saved(self, saved_path):
+        return self.saved_result
+
+    def resolve_remembered(self):
+        return self.remembered_result
+
+    def save(self, path):
+        self.saved_paths.append(path)
+        return True
+
+
+def _never_quit():
+    pytest.fail("the app must not quit here")
+
+
+def test_a_saved_location_that_still_resolves_is_used(tmp_path):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    prefs = FakePrefs(str(folder))
+    bookmarks = FakeBookmarks(saved=str(folder))
+
+    path = applio_data_location.resolve(
+        prefs.saved, prefs, bookmarks, None, None, _never_quit
+    )
+
+    assert path == str(folder)
+
+
+def test_a_bookmark_of_an_earlier_installation_restores_the_location(tmp_path):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    prefs = FakePrefs()
+    bookmarks = FakeBookmarks(remembered=str(folder))
+
+    path = applio_data_location.resolve(
+        None, prefs, bookmarks, None, None, _never_quit
+    )
+
+    assert path == str(folder)
+    assert prefs.saved == str(folder)
+
+
+def test_the_first_choice_is_saved_with_its_bookmark(tmp_path):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    prefs, bookmarks = FakePrefs(), FakeBookmarks()
+    picks = iter([str(folder)])
+
+    path = applio_data_location.resolve(
+        prefs.saved,
+        prefs,
+        bookmarks,
+        lambda: next(picks),
+        lambda reason: pytest.fail(f"unexpected prompt: {reason}"),
+        _never_quit,
+    )
+
+    assert path == str(folder)
+    assert prefs.saved == str(folder)
+    assert prefs.first_run_complete is True
+    assert bookmarks.saved_paths == [str(folder)]
+
+
+def test_an_unwritable_choice_asks_again(tmp_path):
+    (tmp_path / "blocker").write_text("not a folder", encoding="utf-8")
+    good = tmp_path / "data"
+    good.mkdir()
+    prefs, bookmarks = FakePrefs(), FakeBookmarks()
+    picks = iter([str(tmp_path / "blocker" / "data"), str(good)])
+    reasons = []
+
+    path = applio_data_location.resolve(
+        prefs.saved,
+        prefs,
+        bookmarks,
+        lambda: next(picks),
+        lambda reason: reasons.append(reason) or True,
+        _never_quit,
+    )
+
+    assert path == str(good)
+    assert reasons == ["not_writable"]
+
+
+def test_cancelling_and_choosing_quit_quits(tmp_path):
+    prefs, bookmarks = FakePrefs(), FakeBookmarks()
+    quit_calls = []
+
+    path = applio_data_location.resolve(
+        prefs.saved,
+        prefs,
+        bookmarks,
+        lambda: None,
+        lambda reason: False,
+        lambda: quit_calls.append(True),
+    )
+
+    assert path is None
+    assert quit_calls == [True]
+
+
+def test_a_saved_location_that_is_gone_says_so(tmp_path):
+    gone = str(tmp_path / "unplugged disk")
+    good = tmp_path / "data"
+    good.mkdir()
+    prefs, bookmarks = FakePrefs(gone), FakeBookmarks(saved=None)
+    picks = iter([None, str(good)])
+    reasons = []
+
+    path = applio_data_location.resolve(
+        prefs.saved,
+        prefs,
+        bookmarks,
+        lambda: next(picks),
+        lambda reason: reasons.append(reason) or True,
+        _never_quit,
+    )
+
+    assert path == str(good)
+    assert reasons == ["unreachable"]
+```
+
+- [ ] **Step 2: Run it and see it fail**
+
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_data_location.py`
+Expected: collection error, `No module named 'applio_data_location'`.
+
+- [ ] **Step 3: Create `applio_data_location.py`**
+
+```python
+"""Where the store edition keeps its data: a folder the user chose.
+
+Never inside the app's container, which macOS may remove together with the
+app. Access to a folder outside the container is a security-scoped bookmark
+(applio_bookmarks). This module decides, in this order:
+
+1. The bookmark of the location saved in the preferences resolves: use it.
+2. A bookmark kept from an earlier installation resolves: use it, and make
+   it the saved location.
+3. Otherwise the user chooses a folder. A choice that cannot be used, or a
+   cancelled dialog, asks again or quits: the store edition has no default
+   folder it could write to.
+
+AppKit is not imported here. The picker, the confirmation and quitting are
+passed in, so the logic runs in tests with plain functions.
+"""
+
+import logging
+import os
+
+
+def real_home():
+    """The user's home folder. In the sandbox `~` is the app's container."""
+    import pwd
+
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def is_writable(path):
+    """True when files can be created in `path`."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write_test")
+        with open(probe, "w") as f:
+            f.write("test")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def resolve(saved_path, prefs, bookmarks, pick_folder, confirm_continue, quit_app):
+    """Return the data location for this run, or None when the user quits.
+
+    `confirm_continue(reason)` returns True to go on asking ("not_writable",
+    "cancelled" or "unreachable"). `quit_app()` ends the app.
+    """
+    unreachable = None
+    if saved_path:
+        path = bookmarks.resolve_saved(saved_path)
+        if path:
+            return path
+        unreachable = saved_path
+        logging.warning(f"[Data location] Not reachable: {saved_path}")
+    path = bookmarks.resolve_remembered()
+    if path and os.path.isdir(path):
+        logging.info(f"[Data location] Restored from an earlier installation: {path}")
+        prefs.set_data_path(path)
+        return path
+    while True:
+        chosen = pick_folder()
+        if chosen and is_writable(chosen):
+            prefs.set_data_path(chosen)
+            prefs.mark_first_run_complete()
+            bookmarks.save(chosen)
+            return chosen
+        if chosen:
+            reason = "not_writable"
+        elif unreachable:
+            reason = "unreachable"
+        else:
+            reason = "cancelled"
+        if not confirm_continue(reason):
+            quit_app()
+            return None
+```
+
+- [ ] **Step 4: Run the tests and see them pass**
+
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_data_location.py`
+Expected: `6 passed`
+
+- [ ] **Step 5: The wrapper uses it**
 
 At the top of `macos_wrapper.py`, with the other fork imports:
 
 ```python
-from applio_edition import default_data_location, prepare_for_sandbox, store_edition
+import applio_bookmarks
+import applio_data_location
+from applio_edition import prepare_for_sandbox, store_edition
 ```
-
-- [ ] **Step 2: No folder prompt in the store edition**
 
 In `start_gui`, replace:
 
@@ -1444,25 +2071,75 @@ by:
 ```python
     else:
         DATA_PATH = _prefs.get_data_path()
-        if store_edition() and not DATA_PATH:
-            # First run of the store edition: no folder prompt. The data goes
-            # to the app's own container; the File menu can move it later.
-            DATA_PATH = default_data_location()
+        if store_edition():
+            DATA_PATH = applio_data_location.resolve(
+                DATA_PATH,
+                _prefs,
+                applio_bookmarks,
+                lambda: select_data_folder(applio_data_location.real_home()),
+                confirm_store_data_location,
+                quit_app=lambda: os._exit(0),
+            )
+            if not DATA_PATH:
+                return
 
     if not DATA_PATH:
 ```
 
-The direct edition keeps the prompt: `store_edition()` is `False` there and `DATA_PATH` stays unset.
+The direct edition keeps its first-run prompt: `store_edition()` is `False` there and the block below is unchanged.
 
-- [ ] **Step 3: The MIME-type fix before Gradio**
+Next to `confirm_data_location`, add:
+
+```python
+def confirm_store_data_location(reason):
+    """Store edition: there is no default folder, so the choice is a folder or Quit.
+
+    `reason` is "not_writable", "cancelled" or "unreachable". Returns True to
+    ask for a folder again.
+    """
+    from AppKit import NSAlert, NSApp, NSAlertFirstButtonReturn
+
+    import applio_i18n
+
+    _t = applio_i18n.native_tr
+
+    NSApp.activateIgnoringOtherApps_(True)
+    alert = NSAlert.alloc().init()
+    if reason == "not_writable":
+        alert.setMessageText_(_t("The selected location is not writable."))
+        alert.setInformativeText_(
+            _t("Choose a folder Applio can write to.")
+        )
+    elif reason == "unreachable":
+        alert.setMessageText_(_t("The data location cannot be reached."))
+        alert.setInformativeText_(
+            _t(
+                "Connect the disk that holds it, or choose another folder. "
+                "Applio keeps models, datasets and training results there, "
+                "and they stay when the app is removed."
+            )
+        )
+    else:
+        alert.setMessageText_(_t("No data location was chosen."))
+        alert.setInformativeText_(
+            _t(
+                "Applio keeps models, datasets and training results in a "
+                "folder you choose, on any disk. They stay there when the "
+                "app is removed."
+            )
+        )
+    alert.addButtonWithTitle_(_t("Choose Folder"))
+    alert.addButtonWithTitle_(_t("Quit"))
+    return alert.runModal() == NSAlertFirstButtonReturn
+```
+
+- [ ] **Step 6: The MIME-type fix before Gradio, and no Python file in the data location**
 
 In `start_backend`, before `from app import launch_gradio`:
 
 ```python
             prepare_for_sandbox()
 ```
-
-- [ ] **Step 4: No Python file in the data location**
 
 In `setup_bundled_resources`, as the first line of the inner `copy_file`:
 
@@ -1472,165 +2149,7 @@ In `setup_bundled_resources`, as the first line of the inner `copy_file`:
             return
 ```
 
-- [ ] **Step 5: Check and commit**
-
-```bash
-venv_macos/bin/python -c "import macos_wrapper"
-venv_macos/bin/python -m pytest -q tests
-venv_macos/bin/python -m black --check macos_wrapper.py
-git add macos_wrapper.py
-git commit -m "store: data in the container, no tab scripts copied, Gradio imports in the sandbox"
-```
-
----
-
-### Task 5: Bookmarks for the data location
-
-**Goal:** A data location chosen with "Set Data Location" outside the container stays reachable after a restart.
-
-**Files:**
-- Create: `applio_bookmarks.py`
-- Create: `tests/test_applio_bookmarks.py`
-- Modify: `applio_native_picker.py` (one accessor after `mark_native_loop_available`), `applio_launcher.py` (`setDataLocation_`, near line 6505), `macos_wrapper.py` (the block changed in task 4)
-
-**Acceptance Criteria:**
-- [ ] A bookmark saved for a folder resolves back to that folder (path comparison after `os.path.realpath`).
-- [ ] A missing bookmark file resolves to `None` and raises nothing.
-- [ ] `bookmark_path()` is under `~/Library/Application Support/Applio/` (inside the container in the sandbox).
-- [ ] `setDataLocation_` saves a bookmark in the store edition; the wrapper resolves it at start.
-
-**Verify:** `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py` → all pass
-
-**Steps:**
-
-- [ ] **Step 1: Write the failing test**
-
-`tests/test_applio_bookmarks.py`:
-
-```python
-"""applio_bookmarks: a saved folder resolves back to the same folder."""
-
-import os
-
-import applio_bookmarks
-
-
-def test_bookmark_round_trip(tmp_path):
-    folder = tmp_path / "data location"
-    folder.mkdir()
-    store_at = str(tmp_path / "support" / "data_location.bookmark")
-
-    assert applio_bookmarks.save_bookmark(str(folder), store_at) is True
-    assert os.path.exists(store_at)
-
-    resolved = applio_bookmarks.resolve_bookmark(store_at)
-
-    assert resolved is not None
-    assert os.path.realpath(resolved) == os.path.realpath(str(folder))
-
-
-def test_a_missing_bookmark_resolves_to_nothing(tmp_path):
-    assert applio_bookmarks.resolve_bookmark(str(tmp_path / "none")) is None
-
-
-def test_the_bookmark_lives_in_application_support():
-    assert applio_bookmarks.bookmark_path() == os.path.expanduser(
-        "~/Library/Application Support/Applio/data_location.bookmark"
-    )
-
-
-def test_a_folder_that_does_not_exist_gets_no_bookmark(tmp_path):
-    store_at = str(tmp_path / "support" / "data_location.bookmark")
-
-    assert (
-        applio_bookmarks.save_bookmark(str(tmp_path / "missing"), store_at) is False
-    )
-    assert not os.path.exists(store_at)
-```
-
-- [ ] **Step 2: Run it and see it fail**
-
-Run: `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py`
-Expected: collection error, `No module named 'applio_bookmarks'`.
-
-- [ ] **Step 3: Create `applio_bookmarks.py`**
-
-```python
-"""Security-scoped bookmark of the data location (Mac App Store edition).
-
-In the sandbox a folder outside the app's container is reachable through the
-folder picker for the session in which it was picked. A bookmark keeps that
-access across launches. The bookmark itself is stored in the app's own
-Application Support folder, which is inside the container.
-
-AppKit is imported lazily: importing this module has no side effects.
-"""
-
-import logging
-import os
-
-BOOKMARK_NAME = "data_location.bookmark"
-
-
-def bookmark_path() -> str:
-    return os.path.expanduser(
-        os.path.join("~/Library/Application Support/Applio", BOOKMARK_NAME)
-    )
-
-
-def save_bookmark(path: str, store_at: str | None = None) -> bool:
-    """Create a security-scoped bookmark for `path` and write it. False on failure."""
-    from Foundation import NSURL
-
-    url = NSURL.fileURLWithPath_(path)
-    data, error = url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error_(
-        0, None, None, None
-    )
-    if data is None:
-        logging.warning(f"[Bookmarks] Could not create a bookmark for {path}: {error}")
-        return False
-    store_at = store_at or bookmark_path()
-    os.makedirs(os.path.dirname(store_at), exist_ok=True)
-    with open(store_at, "wb") as f:
-        f.write(data)
-    return True
-
-
-def resolve_bookmark(store_at: str | None = None) -> str | None:
-    """Resolve the saved bookmark and start accessing the folder.
-
-    Returns the folder's path, or None when there is no bookmark or it cannot
-    be resolved. The access stays on for the life of the process: a
-    security-scoped resource may be released only as often as it was started.
-    """
-    store_at = store_at or bookmark_path()
-    if not os.path.exists(store_at):
-        return None
-    from Foundation import NSURL
-
-    with open(store_at, "rb") as f:
-        data = f.read()
-    url, stale, error = (
-        NSURL.URLByResolvingBookmarkData_options_relativeToURL_bookmarkDataIsStale_error_(
-            data, 0, None, None, None
-        )
-    )
-    if url is None:
-        logging.warning(f"[Bookmarks] Could not resolve {store_at}: {error}")
-        return None
-    url.startAccessingSecurityScopedResource()
-    path = url.path()
-    if stale:
-        save_bookmark(path, store_at)
-    return path
-```
-
-- [ ] **Step 4: Run the test and see it pass**
-
-Run: `venv_macos/bin/python -m pytest -q tests/test_applio_bookmarks.py`
-Expected: `4 passed`. If PyObjC raises a `TypeError` on the two calls, the installed PyObjC does not take `None` for the out parameters: drop the trailing `None` arguments of `error:` and pass no value for `isStale:` (the returned tuple stays `(url, stale, error)`), then run again.
-
-- [ ] **Step 5: Save the bookmark when a location is chosen**
+- [ ] **Step 7: A new choice in the menu gets its bookmark**
 
 In `applio_launcher.py`, in `setDataLocation_`, after `new_path = urls[0].path()` and its `logging.info(...)` line:
 
@@ -1640,63 +2159,44 @@ In `applio_launcher.py`, in `setDataLocation_`, after `new_path = urls[0].path()
                 if store_edition():
                     import applio_bookmarks
 
-                    applio_bookmarks.save_bookmark(new_path)
+                    applio_bookmarks.save(new_path)
 ```
 
-- [ ] **Step 6: Resolve it at start**
+- [ ] **Step 8: Register the module, check, commit**
 
-In `macos_wrapper.py`, the block written in task 4 step 2 becomes:
-
-```python
-    else:
-        DATA_PATH = _prefs.get_data_path()
-        if store_edition() and DATA_PATH:
-            # A folder outside the container is reachable only through the
-            # bookmark made when it was chosen.
-            import applio_bookmarks
-
-            DATA_PATH = applio_bookmarks.resolve_bookmark() or DATA_PATH
-        if store_edition() and not DATA_PATH:
-            # First run of the store edition: no folder prompt. The data goes
-            # to the app's own container; the File menu can move it later.
-            DATA_PATH = default_data_location()
-
-    if not DATA_PATH:
-```
-
-When the bookmark no longer resolves, the existing write test in the first-run block of the direct edition does not run (the location is set); the folder is simply not writable, and the app's own file errors say so. Task 7 step 7.10 looks at what the user sees and decides whether a clearer message is needed.
-
-- [ ] **Step 7: Commit**
+In `HIDDEN_IMPORTS` (`build_macos.py`), add `"applio_data_location",`.
 
 ```bash
+venv_macos/bin/python -c "import macos_wrapper"
 venv_macos/bin/python -m pytest -q tests
-venv_macos/bin/python -m black --check applio_bookmarks.py applio_launcher.py macos_wrapper.py tests/test_applio_bookmarks.py
-git add applio_bookmarks.py applio_launcher.py macos_wrapper.py tests/test_applio_bookmarks.py
-git commit -m "store: keep a chosen data location reachable with a bookmark"
+venv_macos/bin/python -m black --check macos_wrapper.py applio_launcher.py applio_data_location.py build_macos.py tests/test_applio_data_location.py
+git add applio_data_location.py macos_wrapper.py applio_launcher.py build_macos.py tests/test_applio_data_location.py
+git commit -m "store: the data lives in a folder the user chose, never in the container"
 ```
 
 ---
+### Task 6: Interface for the store, and selectable model downloads
 
-### Task 6: Interface for the store
-
-**Goal:** The store edition has no Plugins page, no updater, no update check and no Discord presence; it asks before the first model download and links to the privacy policy. The Realtime page is left out (decision 5).
+**Goal:** The store edition has no Plugins page, no updater, no update check and no Discord presence; it asks which model parts to download instead of taking about 3 GB, and offers the rest later under File, Download Models…; it links to the privacy policy and names its licences. The Realtime page is left out (decision 5).
 
 **Files:**
-- Create: `patches/store/patch_store_app.py`, `applio_download_prompt.py`
-- Create: `tests/test_applio_download_prompt.py`, `tests/test_menu_edition.py`
-- Modify: `tests/test_store_patchers.py`, `build_macos.py` (`STORE_PATCHES`, `PATCH_MARKERS_STORE`, `post_build_cleanup` near 1444), `applio_native_picker.py`, `menu_spec.py`, `applio_launcher.py` (`_launch_time_update_check` near 6252, the menu source near 5724, the action dictionary near 6301)
+- Create: `patches/store/patch_store_app.py`, `applio_model_downloads.py`
+- Create: `tests/test_applio_model_downloads.py`, `tests/test_menu_edition.py`
+- Modify: `tests/test_store_patchers.py`, `build_macos.py` (`STORE_PATCHES`, `PATCH_MARKERS_STORE`, `post_build_cleanup` near 1444, `HIDDEN_IMPORTS`), `applio_native_picker.py`, `menu_spec.py`, `applio_launcher.py` (the menu source near 5724, `_launch_time_update_check` near 6252, the action dictionary near 6301)
 - Patched at build time only: `app.py` (lines 10-12, 118, 120, 124-131, 138-144, 187, 193), `tabs/settings/settings.py` (lines 13, 51-57)
 
 **Acceptance Criteria:**
-- [ ] After the patch `app.py` has no `ensure_not_updating`, no `plugins_tab`, no `RPCManager`, no `realtime_tab`; the `run_prerequisites_script(` call sits inside `if confirm_first_download(now_dir):`.
-- [ ] `tabs/settings/settings.py` has no `presence_tab` and shows "Privacy Policy".
-- [ ] Both files compile; second run is a no-op.
-- [ ] `confirm_first_download` returns `True` when the models are there and when no native loop runs; `False` or `True` as answered otherwise.
-- [ ] The store menu has no `app.check_updates` and has `app.privacy_policy`; the shared `MENU` is not modified.
+- [ ] After the patch `app.py` has no `ensure_not_updating`, `plugins_tab`, `RPCManager`, `load_config_presence`, `realtime_tab` nor `run_prerequisites_script`; `first_launch(now_dir)` stands where the download ran.
+- [ ] `tabs/settings/settings.py` has no `presence_tab`, shows "Privacy Policy" and names soxr and edge-tts.
+- [ ] Both files compile; second run is a no-op; no argument exits 1.
+- [ ] `missing_parts` names the parts with a missing file and nothing else.
+- [ ] `first_launch` asks and downloads only when the base models are missing, and only what was chosen.
+- [ ] Without a native loop nothing is asked.
+- [ ] The store menu has no `app.check_updates`, has `app.privacy_policy` and `file.download_models`; the shared `MENU` is not modified.
 - [ ] Seven markers in `PATCH_MARKERS_STORE`.
-- [ ] The store bundle contains no `tabs/plugins/`, no `assets/updater.py`, no `tabs/settings/sections/presence.py`, no `assets/discord_presence.py`.
+- [ ] The store bundle ships no `tabs/plugins/`, `assets/updater.py`, `tabs/settings/sections/presence.py` or `assets/discord_presence.py`.
 
-**Verify:** `venv_macos/bin/python -m pytest -q tests/test_store_patchers.py tests/test_applio_download_prompt.py tests/test_menu_edition.py` → all pass
+**Verify:** `venv_macos/bin/python -m pytest -q tests/test_store_patchers.py tests/test_applio_model_downloads.py tests/test_menu_edition.py` → all pass (`10 + 7 + 4`)
 
 **Steps:**
 
@@ -1721,6 +2221,7 @@ def test_app_patcher_applies(tmp_path):
         "RPCManager",
         "load_config_presence",
         "realtime_tab",
+        "run_prerequisites_script",
     ):
         assert gone not in app_text, gone
     for marker in (
@@ -1731,23 +2232,12 @@ def test_app_patcher_applies(tmp_path):
         "_APPLIO_STORE_NO_REALTIME_",
     ):
         assert app_text.count(marker) == 1, marker
+    assert app_text.count("first_launch(now_dir)") == 1
     settings_text = _read(copied[1])
     assert "presence_tab" not in settings_text
     assert "Privacy Policy" in settings_text
+    assert "soxr" in settings_text and "edge-tts" in settings_text
     assert settings_text.count("_applio_privacy_policy_tab(") == 2
-
-
-def test_the_download_is_asked_for_first(tmp_path):
-    app = _copy("app.py", tmp_path)
-    _copy("tabs/settings/settings.py", tmp_path)
-
-    assert _run("patch_store_app.py", os.path.join(tmp_path, "app.py")).returncode == 0
-
-    app_text = _read(app)
-    guard = app_text.index("if confirm_first_download(now_dir):")
-    call = app_text.index("run_prerequisites_script(", guard)
-    assert call > guard
-    assert "run_prerequisites_script(" not in app_text[:guard]
 
 
 def test_app_patcher_is_a_no_op_the_second_time(tmp_path):
@@ -1763,159 +2253,333 @@ def test_app_patcher_is_a_no_op_the_second_time(tmp_path):
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `venv_macos/bin/python -m pytest -q tests/test_store_patchers.py -k "app_patcher or asked_for_first"`
-Expected: 3 failures, the patcher does not exist yet.
+Run: `venv_macos/bin/python -m pytest -q tests/test_store_patchers.py -k app_patcher`
+Expected: 2 failures, the patcher does not exist yet.
 
-- [ ] **Step 3: Write the failing test for the download prompt**
+- [ ] **Step 3: Write the failing test for the downloads**
 
-`tests/test_applio_download_prompt.py`:
+`tests/test_applio_model_downloads.py`:
 
 ```python
-"""applio_download_prompt: ask once, before the first model download."""
+"""applio_model_downloads: ask which parts, download only those, only once."""
 
-import os
-
-import applio_download_prompt
+import applio_model_downloads
 import applio_native_picker
+from rvc.lib.tools import prerequisites_download as upstream
 
 
-def _models(data_path):
-    marker = os.path.join(data_path, applio_download_prompt.MODEL_MARKER)
-    os.makedirs(os.path.dirname(marker))
-    with open(marker, "wb") as f:
-        f.write(b"")
-
-
-def test_models_absent(tmp_path):
-    assert applio_download_prompt.models_are_present(str(tmp_path)) is False
-
-
-def test_models_present(tmp_path):
-    _models(str(tmp_path))
-    assert applio_download_prompt.models_are_present(str(tmp_path)) is True
-
-
-def test_no_data_path_counts_as_absent():
-    assert applio_download_prompt.models_are_present("") is False
-
-
-def test_no_prompt_when_the_models_are_there(tmp_path, monkeypatch):
-    _models(str(tmp_path))
-    monkeypatch.setattr(
-        applio_download_prompt,
-        "_confirm_on_main_thread",
-        lambda result: result.update({"shown": True, "answer": False}),
+def _all_lists():
+    return (
+        upstream.models_list
+        + upstream.embedders_list
+        + upstream.pretraineds_hifigan_list
+        + upstream.pretraineds_refinegan_list
     )
 
-    # Present models: the answer is True even though the prompt would say no.
-    assert applio_download_prompt.confirm_first_download(str(tmp_path)) is True
+
+def test_everything_is_missing_on_an_empty_data_location(tmp_path):
+    assert applio_model_downloads.missing_parts(str(tmp_path)) == [
+        "base",
+        "hifigan",
+        "refinegan",
+    ]
 
 
-def test_no_native_loop_means_yes(tmp_path, monkeypatch):
+def test_nothing_is_missing_when_every_file_is_there(tmp_path):
+    for remote_folder, files in _all_lists():
+        folder = tmp_path / upstream.folder_mapping_list[remote_folder]
+        folder.mkdir(parents=True)
+        for name in files:
+            (folder / name).write_bytes(b"x")
+
+    assert applio_model_downloads.missing_parts(str(tmp_path)) == []
+
+
+def test_a_part_with_one_missing_file_counts_as_missing(tmp_path):
+    for remote_folder, files in _all_lists():
+        folder = tmp_path / upstream.folder_mapping_list[remote_folder]
+        folder.mkdir(parents=True)
+        for name in files:
+            (folder / name).write_bytes(b"x")
+    (tmp_path / upstream.folder_mapping_list["pretrained_v2/"] / "f0G48k.pth").unlink()
+
+    assert applio_model_downloads.missing_parts(str(tmp_path)) == ["hifigan"]
+
+
+def test_nothing_is_asked_without_a_native_loop(tmp_path, monkeypatch):
     monkeypatch.setattr(applio_native_picker, "_native_loop_available", False)
-    assert applio_download_prompt.confirm_first_download(str(tmp_path)) is True
+    assert applio_model_downloads.ask_which_parts(["base"], required=True) is None
 
 
-def _answer(monkeypatch, answer):
-    monkeypatch.setattr(applio_native_picker, "_native_loop_available", True)
+def test_first_launch_asks_only_when_the_base_is_missing(tmp_path, monkeypatch):
+    for remote_folder, files in upstream.models_list + upstream.embedders_list:
+        folder = tmp_path / upstream.folder_mapping_list[remote_folder]
+        folder.mkdir(parents=True)
+        for name in files:
+            (folder / name).write_bytes(b"x")
+    asked = []
     monkeypatch.setattr(
-        "PyObjCTools.AppHelper.callAfter", lambda function: function()
+        applio_model_downloads,
+        "ask_which_parts",
+        lambda missing, required: asked.append((missing, required)) or [],
+    )
+
+    applio_model_downloads.first_launch(str(tmp_path))
+
+    assert asked == []  # the optional parts are left to the File menu
+
+
+def test_first_launch_downloads_what_was_chosen(tmp_path, monkeypatch):
+    downloaded = []
+    monkeypatch.setattr(
+        applio_model_downloads, "ask_which_parts", lambda missing, required: ["base"]
     )
     monkeypatch.setattr(
-        applio_download_prompt,
-        "_confirm_on_main_thread",
-        lambda result: result.update({"shown": True, "answer": answer}),
+        applio_model_downloads, "download_parts", lambda parts: downloaded.append(parts)
     )
 
+    applio_model_downloads.first_launch(str(tmp_path))
 
-def test_a_declined_download_is_false(tmp_path, monkeypatch):
-    _answer(monkeypatch, False)
-    assert applio_download_prompt.confirm_first_download(str(tmp_path)) is False
+    assert downloaded == [["base"]]
 
 
-def test_an_accepted_download_is_true(tmp_path, monkeypatch):
-    _answer(monkeypatch, True)
-    assert applio_download_prompt.confirm_first_download(str(tmp_path)) is True
+def test_first_launch_downloads_nothing_when_the_answer_is_not_now(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        applio_model_downloads, "ask_which_parts", lambda missing, required: None
+    )
+    monkeypatch.setattr(
+        applio_model_downloads,
+        "download_parts",
+        lambda parts: pytest.fail("must not download"),
+    )
+
+    applio_model_downloads.first_launch(str(tmp_path))
 ```
 
 - [ ] **Step 4: Run it and see it fail**
 
-Run: `venv_macos/bin/python -m pytest -q tests/test_applio_download_prompt.py`
-Expected: collection error, `No module named 'applio_download_prompt'`.
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_model_downloads.py`
+Expected: collection error, `No module named 'applio_model_downloads'`.
 
-- [ ] **Step 5: Create `applio_download_prompt.py`**
+- [ ] **Step 5: Create `applio_model_downloads.py`**
 
 ```python
-"""Store edition: ask before the first model download (guideline 4.2.3).
+"""Store edition: which models are downloaded, and when.
 
-The backend that calls this module is a worker thread, so the alert is
-handed to the main AppKit thread with AppHelper.callAfter, like the native
-picker does. Importing this module has no side effects.
+The direct edition downloads everything at every start until it is all
+there: about 3 GB. The store edition asks first (App Store guideline 4.2.3)
+and takes the parts separately:
+
+- base: the pitch extractors and the voice embedder, about 0.6 GB. Needed to
+  convert and to train.
+- hifigan: the HiFi-GAN pretrained voices, about 0.6 GB. Optional.
+- refinegan: the RefineGAN pretrained voices, about 2.0 GB. Optional.
+
+At the first launch only the missing base part triggers the dialog. File,
+Download Models… fetches whatever is still missing later on. Upstream's
+download helpers do the work; they resolve the destination folders from the
+working directory, which is the data location in the app.
+
+Importing this module has no side effects.
 """
 
+import logging
 import os
 import threading
 
 import applio_native_picker
 
-# One file of the downloaded set: when it exists, the models are there.
-MODEL_MARKER = os.path.join("rvc", "models", "predictors", "rmvpe.pt")
-PROMPT_TIMEOUT_S = 600  # the user may leave the alert on screen
-DOWNLOAD_SIZE_TEXT = "about 3 GB"
+BASE = "base"
+PARTS = (
+    (BASE, "Pitch extractors and voice embedder", "about 0.6 GB"),
+    ("hifigan", "HiFi-GAN pretrained voices", "about 0.6 GB"),
+    ("refinegan", "RefineGAN pretrained voices", "about 2.0 GB"),
+)
+DIALOG_TIMEOUT_S = 600  # the user may leave the dialog on screen
 
 
-def models_are_present(data_path: str) -> bool:
-    """True when the first-launch model download has already happened."""
-    return bool(data_path) and os.path.exists(os.path.join(data_path, MODEL_MARKER))
+def _lists():
+    """Upstream's lists of (remote folder, files), per part."""
+    from rvc.lib.tools import prerequisites_download as upstream
+
+    return {
+        BASE: (upstream.models_list, upstream.embedders_list),
+        "hifigan": (upstream.pretraineds_hifigan_list,),
+        "refinegan": (upstream.pretraineds_refinegan_list,),
+    }
 
 
-def _confirm_on_main_thread(result):
+def missing_parts(data_path):
+    """The parts with at least one file missing under `data_path`."""
+    from rvc.lib.tools import prerequisites_download as upstream
+
+    lists = _lists()
+    missing = []
+    for part, _, _ in PARTS:
+        for remote_folder, files in lists[part]:
+            local_folder = upstream.folder_mapping_list.get(remote_folder, "")
+            here = any(
+                not upstream.is_downloaded(os.path.join(data_path, local_folder, name))
+                for name in files
+            )
+            if here:
+                missing.append(part)
+                break
+    return missing
+
+
+def download_parts(parts):
+    """Download what is missing of `parts`. The working directory must be the
+    data location: upstream resolves the destination folders from it."""
+    from tqdm import tqdm
+
+    from rvc.lib.tools import prerequisites_download as upstream
+
+    lists = _lists()
+    chosen = [item for part in parts for item in lists[part]]
+    total = sum(upstream.get_file_size_if_missing(item) for item in chosen)
+    with tqdm(
+        total=total or None, unit="iB", unit_scale=True, desc="Downloading models"
+    ) as bar:
+        for item in chosen:
+            upstream.download_mapping_files(item, bar)
+
+
+def _title(part):
+    return next(
+        (title, size) for key, title, size in PARTS if key == part
+    )
+
+
+def _ask_on_main_thread(missing, required, result):
     import applio_i18n
-    from AppKit import NSAlert, NSApp, NSAlertFirstButtonReturn
+    from AppKit import NSAlert, NSApp, NSCheckBox, NSView, NSAlertFirstButtonReturn
+    from Foundation import NSMakeRect
 
     _t = applio_i18n.native_tr
     NSApp.activateIgnoringOtherApps_(True)
     alert = NSAlert.alloc().init()
+    if not missing:
+        alert.setMessageText_(_t("All models are downloaded."))
+        alert.addButtonWithTitle_(_t("OK"))
+        alert.runModal()
+        result["chosen"] = []
+        return
     alert.setMessageText_(_t("Download the models?"))
     alert.setInformativeText_(
         _t(
-            "Applio needs {size} of models to convert and train. They are "
-            "downloaded once and stored in the app's data folder. Without "
-            "them nothing can be converted; the question is asked again at "
-            "the next start."
-        ).format(size=DOWNLOAD_SIZE_TEXT)
+            "Choose what Applio downloads now. The first part is needed to "
+            "convert and to train. The others can be downloaded later with "
+            "File, Download Models."
+        )
     )
+    row_height = 24
+    view = NSView.alloc().initWithFrame_(
+        NSMakeRect(0, 0, 380, row_height * len(missing) + 4)
+    )
+    boxes = {}
+    for row, part in enumerate(missing):
+        title, size = _title(part)
+        box = NSCheckBox.alloc().initWithFrame_(
+            NSMakeRect(0, row_height * (len(missing) - 1 - row) + 2, 370, 22)
+        )
+        box.setTitle_(f"{title} ({size})")
+        box.setState_(1)
+        box.setEnabled_(not (part == BASE and required))
+        view.addSubview_(box)
+        boxes[part] = box
+    alert.setAccessoryView_(view)
     alert.addButtonWithTitle_(_t("Download"))
     alert.addButtonWithTitle_(_t("Not now"))
-    result["answer"] = alert.runModal() == NSAlertFirstButtonReturn
-    result["shown"] = True
+    if alert.runModal() != NSAlertFirstButtonReturn:
+        result["chosen"] = None
+        return
+    result["chosen"] = [part for part in missing if boxes[part].state()]
 
 
-def confirm_first_download(data_path: str) -> bool:
-    """True to go on with the download, False when the user chose Not now.
+def ask_which_parts(missing, required):
+    """The parts the user chose, [] when nothing is missing, None for Not now.
 
-    No prompt, and True, when the models are there or when no native loop
-    runs (started from the sources, drivers, tests).
+    None too when no native loop runs (started from the sources, drivers,
+    tests): then nothing may be waited for.
     """
-    if models_are_present(data_path):
-        return True
     if not applio_native_picker.native_loop_is_available():
-        return True
+        return None
     from PyObjCTools import AppHelper
 
-    result = {"shown": False, "answer": False}
+    result = {"chosen": None}
     done = threading.Event()
 
     def _run():
         try:
-            _confirm_on_main_thread(result)
+            _ask_on_main_thread(missing, required, result)
         finally:
             done.set()
 
     AppHelper.callAfter(_run)
-    if not done.wait(timeout=PROMPT_TIMEOUT_S):
-        return True
-    return result["answer"]
+    if not done.wait(timeout=DIALOG_TIMEOUT_S):
+        return None
+    return result["chosen"]
+
+
+def _report(message):
+    """Show a short message on the main thread, or log it without a loop."""
+    if not applio_native_picker.native_loop_is_available():
+        logging.info(f"[Downloads] {message}")
+        return
+    from PyObjCTools import AppHelper
+
+    done = threading.Event()
+
+    def _run():
+        try:
+            import applio_i18n
+            from AppKit import NSAlert, NSApp
+
+            NSApp.activateIgnoringOtherApps_(True)
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(applio_i18n.native_tr(message))
+            alert.addButtonWithTitle_(applio_i18n.native_tr("OK"))
+            alert.runModal()
+        finally:
+            done.set()
+
+    AppHelper.callAfter(_run)
+    done.wait(timeout=DIALOG_TIMEOUT_S)
+
+
+def first_launch(data_path):
+    """Stands where the direct edition starts its download at every start.
+
+    Asks once, when the base models are missing. The optional parts are left
+    to the File menu.
+    """
+    missing = missing_parts(data_path)
+    if BASE not in missing:
+        return
+    chosen = ask_which_parts(missing, required=True)
+    if chosen:
+        download_parts(chosen)
+
+
+def download_from_menu(data_path):
+    """File, Download Models… (store edition). Asks, then downloads, on a
+    worker thread; the native loop must keep running meanwhile."""
+    from PyObjCTools import AppHelper
+
+    def _work():
+        chosen = ask_which_parts(missing_parts(data_path), required=False)
+        if not chosen:
+            return  # Not now, or nothing was missing: the dialog said so
+        try:
+            download_parts(chosen)
+        except Exception as error:  # reported to the user, not raised in a thread
+            logging.exception("[Downloads] Model download failed")
+            _report(f"The download failed: {error}")
+            return
+        _report("Models downloaded.")
+
+    threading.Thread(target=_work, name="applio-model-downloads", daemon=True).start()
 ```
 
 - [ ] **Step 6: Add the accessor to `applio_native_picker.py`**
@@ -1928,9 +2592,9 @@ def native_loop_is_available():
     return _native_loop_available
 ```
 
-- [ ] **Step 7: Run the prompt test and see it pass**
+- [ ] **Step 7: Run the download tests and see them pass**
 
-Run: `venv_macos/bin/python -m pytest -q tests/test_applio_download_prompt.py`
+Run: `venv_macos/bin/python -m pytest -q tests/test_applio_model_downloads.py`
 Expected: `7 passed`
 
 - [ ] **Step 8: Create `patches/store/patch_store_app.py`**
@@ -1942,10 +2606,11 @@ Expected: `7 passed`
 - No updater and no update check (guideline 2.4.5 (vii)).
 - No Plugins page: it downloads code and runs it (2.5.2).
 - No Discord presence. Its card in Settings becomes the privacy policy link
-  (5.1.1 (i)).
-- A prompt before the first model download, with its size (4.2.3).
+  and the licence notes (5.1.1 (i)).
+- The model download asks which parts to take instead of downloading about
+  3 GB (4.2.3; decision 6 of docs/APP_STORE_READINESS.md).
 - No Realtime page: its worker process needs process queues that App Sandbox
-  denies (decision 5 of docs/APP_STORE_READINESS.md).
+  denies (decision 5).
 
 Applied only by `build_macos.py --store`. Argument: the path of app.py.
 Exit codes: 0 patched or already applied, 2 anchor missed, 1 usage.
@@ -1988,19 +2653,11 @@ run_prerequisites_script(
     exe=True,
 )
 '''
-DOWNLOAD_NEW = '''# Run prerequisites
-from core import run_prerequisites_script
+DOWNLOAD_NEW = '''# _APPLIO_STORE_DOWNLOAD_ store edition: guideline 4.2.3 asks to disclose a
+# download and to prompt before it starts. The user picks the parts.
+from applio_model_downloads import first_launch
 
-# _APPLIO_STORE_DOWNLOAD_ store edition: guideline 4.2.3 asks to disclose a
-# large download and to prompt before it starts.
-from applio_download_prompt import confirm_first_download
-
-if confirm_first_download(now_dir):
-    run_prerequisites_script(
-        pretraineds_hifigan=True,
-        models=True,
-        exe=True,
-    )
+first_launch(now_dir)
 '''
 
 REALTIME_IMPORT_OLD = "from tabs.realtime.realtime import realtime_tab\n"
@@ -2020,6 +2677,10 @@ def _applio_privacy_policy_tab():
     from applio_edition import PRIVACY_POLICY_URL
 
     gr.Markdown(f"[Read the privacy policy]({PRIVACY_POLICY_URL})")
+    gr.Markdown(
+        "Applio is open source (MIT licence). This app includes soxr "
+        "(LGPL-2.1) and edge-tts (LGPL-3.0)."
+    )
 '''
 
 SETTINGS_CARD_OLD = '''        with step_card(
@@ -2049,7 +2710,7 @@ def _files(app_py):
             ("plugins import", PLUGINS_IMPORT_OLD, PLUGINS_IMPORT_NEW),
             ("plugins page", PLUGINS_PAGE_OLD, ""),
             ("Discord presence", PRESENCE_OLD, PRESENCE_NEW),
-            ("first download", DOWNLOAD_OLD, DOWNLOAD_NEW),
+            ("model download", DOWNLOAD_OLD, DOWNLOAD_NEW),
             ("realtime import", REALTIME_IMPORT_OLD, REALTIME_IMPORT_NEW),
             ("realtime page", REALTIME_PAGE_OLD, ""),
         ],
@@ -2072,7 +2733,7 @@ Add to `STORE_PATCHES`:
     (
         "patches/store/patch_store_app.py",
         "app.py",
-        "store edition: no updater, plugins, update check or Discord presence; download prompt; privacy link",
+        "store edition: no updater, plugins, update check or Discord presence; selectable downloads; privacy link",
         "file",
     ),
 ```
@@ -2112,42 +2773,52 @@ In `post_build_cleanup` (`build_macos.py`), add at its end:
                 os.remove(target)
 ```
 
+In `HIDDEN_IMPORTS`, add `"applio_model_downloads",`.
+
 - [ ] **Step 10: Write the failing menu test**
 
 `tests/test_menu_edition.py`:
 
 ```python
-"""menu_spec.menu_for_edition: the store menu swaps the update check for the privacy link."""
+"""menu_spec.menu_for_edition: the store menu swaps the update check for the
+privacy link and adds Download Models."""
 
 import menu_spec
 
 
 def _keys(menu):
-    return {leaf.key for leaf in menu_spec.iter_leaves(menu)}
+    return [leaf.key for leaf in menu_spec.iter_leaves(menu) if leaf.key]
 
 
 def test_the_direct_edition_keeps_the_update_check():
     keys = _keys(menu_spec.menu_for_edition(False))
     assert "app.check_updates" in keys
     assert "app.privacy_policy" not in keys
+    assert "file.download_models" not in keys
 
 
 def test_the_store_edition_has_the_privacy_link_and_no_update_check():
     keys = _keys(menu_spec.menu_for_edition(True))
     assert "app.check_updates" not in keys
     assert "app.privacy_policy" in keys
-    assert len(keys) == len(_keys(menu_spec.MENU))
+
+
+def test_the_store_edition_has_download_models_after_the_data_location():
+    keys = _keys(menu_spec.menu_for_edition(True))
+    assert keys.index("file.download_models") == keys.index("file.set_data_location") + 1
 
 
 def test_building_the_store_menu_leaves_the_shared_tree_alone():
+    before = len(_keys(menu_spec.MENU))
     menu_spec.menu_for_edition(True)
     assert "app.check_updates" in _keys(menu_spec.MENU)
+    assert len(_keys(menu_spec.MENU)) == before
 ```
 
 - [ ] **Step 11: Run it and see it fail**
 
 Run: `venv_macos/bin/python -m pytest -q tests/test_menu_edition.py`
-Expected: 3 failures with `AttributeError: module 'menu_spec' has no attribute 'menu_for_edition'`.
+Expected: 4 failures with `AttributeError: module 'menu_spec' has no attribute 'menu_for_edition'`.
 
 - [ ] **Step 12: Add `menu_for_edition` to `menu_spec.py`**
 
@@ -2159,29 +2830,31 @@ def menu_for_edition(store_edition=False):
 
     The store edition has no "Check for Updates" (App Store guideline
     2.4.5 (vii)); its place is taken by the link to the privacy policy
-    (guideline 5.1.1 (i)). The shared MENU is not modified.
+    (guideline 5.1.1 (i)). File gains Download Models… (decision 6). The
+    shared MENU is not modified, and the store-only keys are not added to
+    the key sets above: the tests of the direct menu stay as they are.
     """
     if not store_edition:
         return MENU
-    return [
-        replace(
-            top,
-            submenu=[
-                (
-                    MenuItem(key="app.privacy_policy", title="Privacy Policy…")
-                    if item.key == "app.check_updates"
-                    else item
+    menu = []
+    for top in MENU:
+        if not top.submenu:
+            menu.append(top)
+            continue
+        submenu = []
+        for item in top.submenu:
+            if item.key == "app.check_updates":
+                item = MenuItem(key="app.privacy_policy", title="Privacy Policy…")
+            submenu.append(item)
+            if item.key == "file.set_data_location":
+                submenu.append(
+                    MenuItem(key="file.download_models", title="Download Models…")
                 )
-                for item in top.submenu
-            ],
-        )
-        if top.submenu
-        else top
-        for top in MENU
-    ]
+        menu.append(replace(top, submenu=submenu))
+    return menu
 ```
 
-- [ ] **Step 13: Use it in the launcher, and stop the update check**
+- [ ] **Step 13: Use it in the launcher, stop the update check, add the two actions**
 
 In `applio_launcher.py`, where the menu tree is passed to the renderer (near line 5724), replace `menu_spec.MENU,` by:
 
@@ -2206,6 +2879,7 @@ In the action dictionary (near line 6302), after `d["app.check_updates"] = lambd
 
 ```python
         d["app.privacy_policy"] = lambda: self.openPrivacyPolicy_(None)
+        d["file.download_models"] = lambda: self.downloadModels_(None)
 ```
 
 Next to `checkUpdates_`:
@@ -2214,37 +2888,45 @@ Next to `checkUpdates_`:
     def openPrivacyPolicy_(self, sender):
         """Open the privacy policy page (store edition)."""
         subprocess.Popen(["open", PRIVACY_POLICY_URL])
+
+    def downloadModels_(self, sender):
+        """File, Download Models… (store edition): ask, then download."""
+        import applio_model_downloads
+
+        applio_model_downloads.download_from_menu(self._resolve_data_dir())
 ```
 
 - [ ] **Step 14: Run everything**
 
 ```bash
 venv_macos/bin/python -m pytest -q tests
-venv_macos/bin/python -m black --check build_macos.py menu_spec.py applio_launcher.py applio_native_picker.py applio_download_prompt.py patches/store/patch_store_app.py tests/test_store_patchers.py tests/test_applio_download_prompt.py tests/test_menu_edition.py
+venv_macos/bin/python -m black --check build_macos.py menu_spec.py applio_launcher.py applio_native_picker.py applio_model_downloads.py patches/store/patch_store_app.py tests/test_store_patchers.py tests/test_applio_model_downloads.py tests/test_menu_edition.py
 ```
 
-Expected: all tests pass (`tests/test_store_patchers.py` now runs complete, 11 tests); black leaves the files unchanged.
+Expected: all tests pass (`tests/test_store_patchers.py` complete, 10 tests: 5 pipeline, 1 no-argument, 2 safe load, 2 app); black leaves the files unchanged.
 
 - [ ] **Step 15: Commit**
 
 ```bash
-git add patches/store/patch_store_app.py applio_download_prompt.py applio_native_picker.py menu_spec.py applio_launcher.py build_macos.py tests/test_store_patchers.py tests/test_applio_download_prompt.py tests/test_menu_edition.py
-git commit -m "store: no updater, plugins or Discord presence; ask before the first download; privacy link"
+git add patches/store/patch_store_app.py applio_model_downloads.py applio_native_picker.py menu_spec.py applio_launcher.py build_macos.py tests/test_store_patchers.py tests/test_applio_model_downloads.py tests/test_menu_edition.py
+git commit -m "store: no updater, plugins or Discord presence; selectable model downloads; privacy link"
 ```
 
 ---
-
 ### Task 7: The sandboxed build on this Mac
 
-**Goal:** Run the ad hoc signed store build in the sandbox and record what works: the pipeline in script mode, then the interface in the window, including the owner's VoiceOver pass.
+**Goal:** Run the ad hoc signed store build in the sandbox and record what works: the data location, the downloads, the pipeline in script mode, the interface in the window (the owner's VoiceOver pass), and the pipe probe for a later real-time conversion.
 
 **Files:**
-- No repository change, unless a defect is found (then a fix in its own commit and a new build).
+- Create (local tool, git-ignored): `.claude/store/tools/pipe_channel_probe.py`
+- No repository change, unless a defect is found (then a fix in its own commit and a new build)
 
 **Acceptance Criteria:**
-- [ ] Steps 7.1 to 7.8 pass with captured output.
-- [ ] The owner's VoiceOver checklist (steps 7.11 to 7.20) comes back with a result for every step.
+- [ ] Steps 7.1 to 7.10 pass with captured output.
+- [ ] The owner's VoiceOver checklist (step 7.11) comes back with a result for every item.
+- [ ] The pipe probe and the queue probe print their lines, and the result is written into `docs/APP_STORE_READINESS.md` (section 3).
 - [ ] No file was written into `/Volumes/ssd/ai/applio`, and `dist/` of the main checkout is unchanged.
+- [ ] Test folders, the container and the logs are removed at the end.
 
 **Verify:** the outputs named in each step.
 
@@ -2256,31 +2938,49 @@ In the worktree:
 
 ```bash
 venv_macos/bin/python build_macos.py --store --bundle-id com.iahispano.applio.storetest > .claude/store-build.log 2>&1
-tail -3 .claude/store-build.log
+grep -E "BUILD COMPLETE|LSMinimumSystemVersion set" .claude/store-build.log
 mkdir -p .claude/store
 cp -cR dist-store/Applio.app .claude/store/ApplioStore.app
 ```
 
-Expected: the log ends with `BUILD COMPLETE` and names the Mac App Store edition.
+Expected: both lines, the second with `15.0`.
 
-- [ ] **Step 7.2: Start once with the window, to create the container**
+- [ ] **Step 7.2: The first launch asks for a folder, then for the downloads**
 
 ```bash
 open -n .claude/store/ApplioStore.app
 ```
 
-Expected: the loading screen appears, then the prompt "Download the models?". Leave it unanswered only for step 7.7; otherwise choose Download for now and let it run, or choose Not now for the first pass. Quit with ⌘Q. Then check that the container exists: `ls ~/Library/Containers/com.iahispano.applio.storetest/Data/Library/Application\ Support/Applio/data`.
+Expected, in this order: the folder dialog ("Select Applio Data Location"), opening at the real home folder, not at the app's container. Choose a new folder on the SSD, for example `/Volumes/ssd/github/<worktree>/.claude/store/data` (create it in the dialog). Then the dialog "Download the models?" with three lines; the first is ticked and greyed out. Leave it for step 7.4 and choose Download now.
 
-- [ ] **Step 7.3: Check what the app put into its data location**
+- [ ] **Step 7.3: The download, and what the app wrote**
+
+After the main window appears:
 
 ```bash
-find ~/Library/Containers/com.iahispano.applio.storetest/Data/Library/Application\ Support/Applio/data -name "*.py" | wc -l
-grep -c "Notarized\|ERROR" ~/Library/Containers/com.iahispano.applio.storetest/Data/Library/Logs/Applio/applio_wrapper.log
+find .claude/store/data -name "*.py" | wc -l
+ls .claude/store/data/rvc/models/predictors
 ```
 
-Expected: `0` Python files; read any `ERROR` line found.
+Expected: `0` Python files; `fcpe.pt`, `rmvpe.pt`, `swift.onnx` (all three parts were ticked, so the pretrained voices arrive too).
 
-- [ ] **Step 7.4: Seed a test data folder inside the container**
+- [ ] **Step 7.4: A start with nothing missing asks nothing**
+
+Quit (⌘Q) and start again. Expected: no folder dialog, no download dialog; the main window appears. The bookmark kept the folder.
+
+- [ ] **Step 7.5: Cancelling the folder dialog**
+
+Quit. Remove the app's container and preferences so that the app starts as a first launch again: `rm -r ~/Library/Containers/com.iahispano.applio.storetest` (from the main session; the path is literal; if the permission system refuses, ask the owner to run it). Start, press Escape in the folder dialog. Expected: "No data location was chosen." with Choose Folder and Quit. Choose Folder and pick the same folder as in step 7.2: the app uses it, with the models already there. Then repeat once and choose Quit: the app quits without a further dialog.
+
+If, with the container removed, the app uses the old folder without asking instead, that is the keychain bookmark of task 4 at work already: record it, then delete that keychain item (Keychain Access, service `com.iahispano.applio.storetest.data-location`) and repeat the step.
+
+- [ ] **Step 7.6: Not now, and File, Download Models…**
+
+Start with a data folder that has nothing: with the container removed again, pick a new empty folder and choose Not now. Expected: the main window appears; a conversion says that the models are missing. Menu File, Download Models…: the dialog with the three parts; untick the two optional ones; after the download the message "Models downloaded."; conversion works. Menu File, Download Models… again after all three parts: "All models are downloaded."
+
+- [ ] **Step 7.7: Preprocess, extract and train in script mode**
+
+A script-mode start has no bookmark, so its data folder must be inside the container:
 
 ```bash
 C="$HOME/Library/Containers/com.iahispano.applio.storetest/Data"
@@ -2288,94 +2988,130 @@ mkdir -p "$C/bench-data/rvc/models/pretraineds" "$C/bench-data/assets/datasets" 
 cp -R /Volumes/ssd/github/applio-macOS-native-app/rvc/models/predictors "$C/bench-data/rvc/models/"
 cp -R /Volumes/ssd/github/applio-macOS-native-app/rvc/models/embedders "$C/bench-data/rvc/models/"
 cp -R /Volumes/ssd/github/applio-macOS-native-app/rvc/models/pretraineds/hifi-gan "$C/bench-data/rvc/models/pretraineds/"
-```
-
-About 1.2 GB on the system volume; removed in step 7.21. Do not run the driver's `prep` phase: it downloads the models.
-
-- [ ] **Step 7.5: Preprocess, extract and train in script mode**
-
-Use the local driver `.claude/port-tools/applio_port_frozen_driver.py` of the main checkout (copy the folder into the worktree). It makes its own small dataset (phase `dataset`), then calls `core.run_preprocess_script`, `run_extract_script` and `run_train_script` of the bundle, with `SYNC_TOTAL_EPOCH` epochs:
-
-```bash
 SYNC_MODEL=storetest SYNC_TOTAL_EPOCH=2 APPLIO_DATA_PATH="$C/bench-data" \
   .claude/store/ApplioStore.app/Contents/MacOS/Applio \
   /absolute/path/to/.claude/port-tools/applio_port_frozen_driver.py \
   "$C/bench-data" dataset,preprocess,extract,train > .claude/store/pipeline.log 2>&1
 grep -c "ipc-posix" .claude/store/pipeline.log
-tail -4 "$C/bench-data/logs/storetest/training.log" | cut -c1-200
+grep "history entries" .claude/store/pipeline.log | cut -c1-160
 ls "$C/bench-data/logs/storetest" | grep -c "="
-ls /tmp/applio_debug.txt
 ```
 
-Expected: `0` sandbox denials; the training log shows two epochs; `0` folders named like `331=2.3850` (empty folders of that shape came from the 3.6.2.5 build); no `/tmp/applio_debug.txt`.
+Expected: `0` sandbox denials; three `completed` entries; `0` folders named like `331=2.3850`. Do not run the driver's `prep` phase: it downloads the models. About 1.2 GB go to the system volume; removed in step 7.12.
 
-- [ ] **Step 7.6: Headless check of the pages served**
+- [ ] **Step 7.8: The pages served, without a window**
 
-Start the windowed app against the seeded folder and run `.claude/port-tools/applio_sync_web_check.py` as for the direct build.
+Start the windowed app against a folder that has the models and run `.claude/port-tools/applio_sync_web_check.py <data dir>` from the main checkout's tools, as for the direct build.
 
 Expected: no JavaScript error; the sidebar has no Plugins and no Realtime entry; Settings step 3 is "Privacy Policy".
 
-- [ ] **Step 7.7: The first download, both answers**
-
-Start with an empty data location (remove the folder named in step 7.2's `ls`, then start again).
-
-Expected: the prompt names the size. Not now: the app reaches the main window and a conversion says that the models are missing. Download: the loading screen shows the download and the app reaches the main window.
-
-- [ ] **Step 7.8: The log**
+- [ ] **Step 7.9: The log**
 
 ```bash
 grep -n "ERROR" ~/Library/Containers/com.iahispano.applio.storetest/Data/Library/Logs/Applio/applio_wrapper.log | tail -5
 ```
 
-Expected: no `ERROR` after the line `Version: 3.7.2.1` of the last start, or every one understood and harmless.
+Expected: no `ERROR` after the last `Version: 3.7.2.1` line, or every one understood and harmless.
 
-- [ ] **Steps 7.9 and 7.10: Data location outside the container**
+- [ ] **Step 7.10: The probe for real-time conversion**
 
-In the windowed app: File, Set Data Location, choose a folder on `/Volumes/ssd` (for example a new `applio-store-test` folder). Quit and start again: the app uses that folder (File, Open in Finder, Logs opens it). Then rename that folder in Finder and start again: note what the app says (task 5 step 6). Rename it back.
+`.claude/store/tools/pipe_channel_probe.py` (git-ignored):
 
-- [ ] **Step 7.11 to 7.20: The owner's VoiceOver pass**
+```python
+"""Run under the sandboxed store build: does a pipe work where a queue does not?"""
+
+import multiprocessing as mp
+
+
+def child_pipe(conn):
+    conn.send({"from": "worker"})
+    conn.close()
+
+
+def child_queue(queue):
+    queue.put("hello")
+
+
+def probe_pipe():
+    ctx = mp.get_context("spawn")
+    parent, child_end = ctx.Pipe(duplex=True)
+    process = ctx.Process(target=child_pipe, args=(child_end,))
+    process.start()
+    child_end.close()
+    message = parent.recv()
+    process.join(10)
+    print("PIPE_OK", message)
+
+
+def probe_queue():
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue(maxsize=2)
+    process = ctx.Process(target=child_queue, args=(queue,))
+    process.start()
+    print("QUEUE_OK", queue.get(timeout=10))
+    process.join(10)
+
+
+if __name__ == "__main__":
+    probe_pipe()
+    try:
+        probe_queue()
+    except Exception as error:  # the expected outcome in the sandbox
+        print("QUEUE_FAILED", type(error).__name__, str(error)[:200])
+```
+
+```bash
+.claude/store/ApplioStore.app/Contents/MacOS/Applio /absolute/path/to/.claude/store/tools/pipe_channel_probe.py
+```
+
+Expected: `PIPE_OK {'from': 'worker'}` and then `QUEUE_FAILED ...`. Write both lines, with the date, into section 3 of `docs/APP_STORE_READINESS.md`. A later version can then replace the three queues and two events of `rvc/realtime/worker.py` (`VoiceChangerWorker`) with pipe-based equivalents, behind a store patcher; that needs the list of the queue methods the worker uses first.
+
+- [ ] **Step 7.11: The owner's VoiceOver pass**
 
 Send this checklist inline, complete:
 
-1. Start the app. The loading screen appears, then the main window. The sidebar lists Convert Audio, Text to Speech, Models, Training, Voice Blender, TensorBoard, Audio Tools, Terminal, Settings and Report a bug. There is no Realtime and no Plugins entry.
+1. Start the app. The main window appears with no dialog: the folder and the models are remembered.
 2. Menu Applio: About Applio, Privacy Policy, then Hide Applio. There is no Check for Updates. Privacy Policy opens the policy page in the browser.
-3. Settings: step 3 is Privacy Policy and its link opens the page.
-4. Convert one file with a model you know. The result sounds as with 3.7.2.1.
-5. Convert a folder with 10 or more files. The toasts and the dashboard show the batch as before.
-6. Training: preprocess a small dataset, extract, train 3 epochs. Each step finishes; the dashboard shows the epochs.
-7. Generate the index and convert with the new model.
-8. Text to Speech: speech is generated and converted.
-9. TensorBoard opens.
-10. File, Set Data Location: choose a folder on the SSD, restart: the app uses it. Menu File, Open in Finder, Logs opens the right folder.
+3. Menu File: Set Data Location, Download Models, then the Open in Finder items. Download Models shows "All models are downloaded."
+4. Settings: step 3 is Privacy Policy; its link opens the page; the licences of soxr and edge-tts are named under it.
+5. Convert one file with a model you know. The result sounds as with 3.7.2.1.
+6. Convert a folder with 10 or more files. The toasts and the dashboard show the batch as before.
+7. Training: preprocess a small dataset, extract, train 3 epochs. Each step finishes; the dashboard shows the epochs.
+8. Generate the index and convert with the new model.
+9. Text to Speech: speech is generated and converted.
+10. TensorBoard opens.
+11. File, Set Data Location: choose another folder on the SSD, restart: the app uses it. Menu File, Open in Finder, Logs opens the right folder.
 
-- [ ] **Step 7.21: Clean up**
+- [ ] **Step 7.12: Clean up**
 
-From the main session, with literal paths: remove `.claude/store`, `.claude/store-build.log`, the test folder on the SSD, the data folder inside the container, and the container itself once nothing else is to be tested with this build id.
+From the main session, with literal paths: remove `.claude/store`, `.claude/store-build.log`, the test folders on the SSD, the `bench-data` folder inside the container, and the container itself once nothing else is to be tested with this build id.
 
 ---
+### Task 8: Store signing, profile, flagged string, SDK, reinstall
 
-### Task 8: Store signing, profile, metadata, flagged string, SDK
-
-**Goal:** The build that goes to Apple: signed with the owner's identity, with the embedded profile and the store metadata, without the `itms-services` string, and with what Apple asks of the SDK.
+**Goal:** The build that goes to Apple: signed with the owner's identity and bundle id, with the embedded profile and the store metadata, without the `itms-services` string, with what Apple asks of the SDK, and proven to find its data folder again after a reinstall.
 
 **Files:**
-- Modify: `build_macos.py` (the PyInstaller call near line 1370, a check after it), `build_options.py` (already has `replace_flagged_scheme`), `tests/test_build_options.py`
-- Owner: the App ID and profiles in the Apple developer account, the privacy policy page
+- Modify: `build_macos.py` (the PyInstaller call near line 1370, a check after it)
+- Modify: `tests/test_build_options.py`, `docs/APP_STORE_READINESS.md`
+- Owner: the App ID and profiles in the Apple developer account, the bundle id string, the privacy policy page
 
 **Acceptance Criteria:**
 - [ ] `dist-store/Applio.app` carries `Embedded.provisionprofile`; `codesign -d --entitlements` shows the sandbox key; `codesign --verify --deep --strict` passes.
 - [ ] A scan of the built executable finds `itms-services` in no module.
 - [ ] The sources of `urllib.parse` and `werkzeug.urls` on disk are byte-identical to before the build.
+- [ ] The Info.plist names the owner's bundle id and `LSMinimumSystemVersion` `15.0`.
+- [ ] After removing the app and its container and starting it again, the app uses the data folder with no folder dialog, or (recorded) asks once.
 - [ ] The main executable's `LC_BUILD_VERSION` names an SDK Apple accepts, as shown by `altool --validate-app`.
 - [ ] The privacy policy URL answers with the page.
 
-**Verify:** the commands of steps 8.5, 8.7 and 8.9.
+**Verify:** the commands of steps 8.5, 8.6, 8.7 and 8.9.
 
 **Steps:**
 
 - [ ] **Step 8.1: Owner: the Apple records**
 
-Decisions 1 and 2 answered. Then in the Apple developer account: an App ID with the owner's bundle id, with the capabilities App Sandbox and microphone; a "Mac App Store Connect" profile for distribution and a development profile for it; the "Apple Distribution" identity is on the build Mac already. The page at `PRIVACY_POLICY_URL` is published.
+The bundle id string (still open). In the Apple developer account: an App ID with that bundle id, with the capabilities App Sandbox and microphone; a "Mac App Store Connect" profile for distribution and a development profile for local runs. The "Apple Distribution" identity is on the build Mac already. The page at `PRIVACY_POLICY_URL` is published on GitHub Pages. IAHispano's authorisation for the name and the icon is kept where it can be shown to App Review.
 
 - [ ] **Step 8.2: Strip the flagged string around the PyInstaller call**
 
@@ -2440,7 +3176,7 @@ def flagged_schemes_replaced():
 
 - [ ] **Step 8.3: Check the result after the build**
 
-After the PyInstaller call, for store builds:
+Right after that PyInstaller call, outside the `with`:
 
 ```python
     if STORE_BUILD:
@@ -2459,6 +3195,7 @@ With:
 def flagged_schemes_in_bundle(executable):
     """Return the modules of the frozen executable that still name the scheme."""
     import build_options
+    import tempfile
     from PyInstaller.archive.readers import CArchiveReader, ZlibArchiveReader
 
     archive = CArchiveReader(executable)
@@ -2479,9 +3216,7 @@ def flagged_schemes_in_bundle(executable):
         os.remove(pyz_path)
 ```
 
-`import tempfile` goes with the other imports.
-
-- [ ] **Step 8.4: Test the check on a known input**
+- [ ] **Step 8.4: Test the byte replacement on a known input**
 
 Add to `tests/test_build_options.py`:
 
@@ -2494,7 +3229,7 @@ def test_the_flagged_scheme_is_found_and_the_replacement_is_not():
     )
 ```
 
-- [ ] **Step 8.5: Build with the owner's identity and profile**
+- [ ] **Step 8.5: Build with the owner's identity, bundle id and profile**
 
 With the values of step 8.1 (the profile path is outside the repository; the identity is the name `security find-identity -v -p codesigning` lists):
 
@@ -2505,15 +3240,22 @@ venv_macos/bin/python build_macos.py --store --sign \
   --provisioning-profile "<path>.provisionprofile" > .claude/store-sign.log 2>&1
 tail -4 .claude/store-sign.log
 codesign --verify --deep --strict --verbose=2 dist-store/Applio.app 2>&1 | tail -1
+plutil -p dist-store/Applio.app/Contents/Info.plist | grep -E "CFBundleIdentifier|LSMinimumSystemVersion"
 security cms -D -i dist-store/Applio.app/Contents/Embedded.provisionprofile | plutil -extract Entitlements xml1 -o - - | grep -c app-sandbox
 git status --porcelain
 ```
 
-Expected: `BUILD COMPLETE`; `valid on disk` and `satisfies its Designated Requirement`; `1`; and `git status` shows nothing modified (the interpreter's sources are outside the repository: compare them with the backups under `build/scheme-string-backups/` by `cmp`).
+Expected: `BUILD COMPLETE`; `valid on disk` and `satisfies its Designated Requirement`; the owner's bundle id and `15.0`; `1`; and `git status` shows nothing modified (the interpreter's sources are outside the repository: compare them with the backups under `build/scheme-string-backups/` by `cmp`).
 
-- [ ] **Step 8.6: Run the signed build locally**
+- [ ] **Step 8.6: Run it locally, and the reinstall**
 
-The build signed with "Apple Development" and the development profile must start on this Mac and pass steps 7.2, 7.4 and 7.5 with the owner's bundle id in the paths.
+With the build signed for development ("Apple Development" and the development profile), using the owner's bundle id in the paths:
+
+1. Start: the folder dialog; choose a test folder on the SSD; the download dialog; Download. The main window appears. Quit.
+2. Remove the app and what macOS keeps for it: move `Applio.app` to the Trash, then, from the main session, `rm -r ~/Library/Containers/<the owner's bundle id>` (the preferences and the bookmark file live inside the container; if the permission system refuses the removal, ask the owner to run it).
+3. Put the app back from `dist-store/` and start it.
+
+Expected: no folder dialog; the app uses the test folder (File, Open in Finder, Logs). That is the keychain bookmark. If the folder dialog appears, or macOS asks for keychain access: write down which, and record in `docs/APP_STORE_READINESS.md`: "the keychain route does not work in the sandbox; the app asks for the folder once after a reinstall". Nothing else changes: the data was never at risk.
 
 - [ ] **Step 8.7: The SDK of the main executable**
 
@@ -2536,24 +3278,24 @@ python3 ./waf all --target-arch=arm64
 
 The flags are those of `bootloaders/README.md` in that source tree. Copy the resulting `run` over `venv_macos/lib/python3.12/site-packages/PyInstaller/bootloader/Darwin-64bit/run` after keeping the original as `run.before-store-build`. Build again; `otool` must then name the SDK of Xcode 27. Record the change in `CLAUDE.md`: it changes the direct edition's builds too.
 
-- [ ] **Step 8.9: Check the privacy page**
+- [ ] **Step 8.9: The floor and the privacy page**
 
 ```bash
+plutil -p dist-store/Applio.app/Contents/Info.plist | grep LSMinimumSystemVersion
 curl -s -o /dev/null -w "%{http_code}\n" https://froggeric.github.io/applio-macOS-native-app/privacy/
 ```
 
-Expected: `200`.
+Expected: `"15.0"` and `200`.
 
 - [ ] **Step 8.10: Commit**
 
 ```bash
 venv_macos/bin/python -m pytest -q tests
-git add build_macos.py tests/test_build_options.py
+git add build_macos.py tests/test_build_options.py docs/APP_STORE_READINESS.md
 git commit -m "store: remove the flagged scheme string from the bundle and check the result"
 ```
 
 ---
-
 ### Task 9: Upload, TestFlight and the store record
 
 **Goal:** The build is in App Store Connect, installable through TestFlight, and the record is complete, ready for the owner's word to submit.
@@ -2564,7 +3306,7 @@ git commit -m "store: remove the flagged scheme string from the bundle and check
 **Acceptance Criteria:**
 - [ ] `altool --upload-app` ends without error and the build appears in App Store Connect.
 - [ ] The build installs from TestFlight on the build Mac and converts one file.
-- [ ] The App Store Connect record has: name, bundle id, category Music, privacy policy URL, privacy "Data Not Collected", age rating, at least one macOS screenshot, review notes.
+- [ ] The App Store Connect record has: name Applio, the owner's bundle id, category Music, minimum macOS 15, the privacy policy URL, privacy "Data Not Collected", age rating, at least one macOS screenshot, review notes that name IAHispano's authorisation.
 - [ ] The documentation names the store edition, its build command and its limits.
 - [ ] Nothing was submitted for review: that waits for the owner's word.
 
@@ -2582,20 +3324,25 @@ xcrun altool --upload-app --type macos -f .claude/Applio-store.zip --apiKey "<ke
 
 - [ ] **Step 9.2: TestFlight**
 
-Add the owner as an internal tester, install from TestFlight, convert one file, start one training for two epochs.
+Add the owner as an internal tester, install from TestFlight, convert one file, start one training for two epochs. If a tester with macOS 15 or 26 is available, the same there: those two versions are not tested on the build Mac.
 
 - [ ] **Step 9.3: The record**
 
-Name (30 characters at most), the owner's bundle id, category Music, the privacy policy URL of decision 7, privacy practices "Data Not Collected" (text sent to Microsoft's speech service is the user's own action in text to speech; say so in the notes), age rating, at least one screenshot at 1280 by 800, 1440 by 900, 2560 by 1600 or 2880 by 1800.
+Name Applio (IAHispano's authorisation covers the name and the icon), the owner's bundle id, category Music, the privacy policy URL of decision 7, privacy practices "Data Not Collected" (text sent to Microsoft's speech service is the user's own action in text to speech; say so in the notes), age rating, at least one screenshot at 1280 by 800, 1440 by 900, 2560 by 1600 or 2880 by 1800.
 
 - [ ] **Step 9.4: Review notes**
 
 ```text
 Applio converts voices with voice models that the user trains or downloads.
+It is the macOS edition of the open-source project Applio by IAHispano, made
+with IAHispano's permission to use the name and the icon.
 
-First launch: the app asks to download its models (about 3 GB) before it can
-convert anything. Choose Download. On a normal broadband line this takes
-about 10 minutes.
+First launch: the app asks for a folder for its data, then which models to
+download. The first part (about 0.6 GB, pitch extractors and voice embedder)
+is needed to convert and to train. Two optional sets of pretrained voices
+(about 0.6 GB and 2 GB) can be downloaded later under File, Download Models.
+Choose Download; on a normal broadband line the first part takes about two
+minutes.
 
 To try a conversion without training: Models, download one of the pretrained
 voice models, then Convert Audio: choose that model, drop any audio file,
@@ -2604,16 +3351,15 @@ Convert.
 To try training: Training, any folder with a minute of speech at 48 kHz;
 preprocess, extract, train a few epochs.
 
-The app is an open-source project (MIT licence) wrapped for macOS with
-PyInstaller (Python). It runs in the App Sandbox. It has no plug-in system,
-no updater and no analytics. Network use: model downloads from
-huggingface.co and github.com, and text to speech through Microsoft's online
-service when the user asks for it.
+The app is written in Python and wrapped with PyInstaller. It runs in the
+App Sandbox. It has no plug-in system, no updater and no analytics. Network
+use: model downloads from huggingface.co and github.com, and text to speech
+through Microsoft's online service when the user asks for it.
 ```
 
 - [ ] **Step 9.5: Documentation**
 
-`README_MACOS.md`: a section "Mac App Store edition" with what differs from the direct download. `FORK_DIFFERENCES.md`: the three store patchers. `CHANGELOG.md`: an entry under `[Unreleased]`. `CLAUDE.md`: the `--store` command, `dist-store/`, the rule that store patchers live in `patches/store/` and are re-pointed after an upstream sync. `docs/ROADMAP.md`: the store edition moves from "Later" to done, with the date.
+`README_MACOS.md`: a section "Mac App Store edition" with what differs from the direct download. `FORK_DIFFERENCES.md`: the three store patchers. `CHANGELOG.md`: an entry under `[Unreleased]`, including the computed minimum macOS version of the direct edition. `CLAUDE.md`: the `--store` command, `dist-store/`, the rule that store patchers live in `patches/store/` and are re-pointed after an upstream sync, and that `LSMinimumSystemVersion` is computed. `docs/ROADMAP.md`: the store edition moves from "Later" to done, with the date.
 
 ```bash
 git add README_MACOS.md FORK_DIFFERENCES.md CHANGELOG.md CLAUDE.md docs/ROADMAP.md
@@ -2624,98 +3370,28 @@ git commit -m "docs: the Mac App Store edition"
 
 Only on the owner's explicit word, after TestFlight.
 
----
+- [ ] **Step 9.7: Back to `main`**
 
-### Task 10: A process channel that works in the sandbox (optional)
-
-**Goal:** Know whether real-time conversion can return in a later store version: pipes work in the sandbox, process queues do not.
-
-**Files:**
-- Create (local tool, git-ignored): `.claude/store/tools/pipe_channel_probe.py`
-
-**Acceptance Criteria:**
-- [ ] Under the sandboxed build, the pipe probe prints `PIPE_OK` and exits 0.
-- [ ] Under the same build, the queue probe fails at `ctx.Queue()` with a permission error, which is recorded in `docs/APP_STORE_READINESS.md`.
-- [ ] The result is written into the assessment (section 3), with the date.
-
-**Verify:** the two outputs below.
-
-**Steps:**
-
-- [ ] **Step 1: Write the probe**
-
-```python
-"""Run under the sandboxed store build: does a pipe work where a queue does not?"""
-
-import multiprocessing as mp
-
-
-def child_pipe(conn):
-    conn.send({"from": "worker"})
-    conn.close()
-
-
-def child_queue(queue):
-    queue.put("hello")
-
-
-def probe_pipe():
-    ctx = mp.get_context("spawn")
-    parent, child_end = ctx.Pipe(duplex=True)
-    process = ctx.Process(target=child_pipe, args=(child_end,))
-    process.start()
-    child_end.close()
-    message = parent.recv()
-    process.join(10)
-    print("PIPE_OK", message)
-
-
-def probe_queue():
-    ctx = mp.get_context("spawn")
-    queue = ctx.Queue(maxsize=2)
-    process = ctx.Process(target=child_queue, args=(queue,))
-    process.start()
-    print("QUEUE_OK", queue.get(timeout=10))
-    process.join(10)
-
-
-if __name__ == "__main__":
-    probe_pipe()
-    try:
-        probe_queue()
-    except Exception as error:  # the expected outcome in the sandbox
-        print("QUEUE_FAILED", type(error).__name__, str(error)[:200])
-```
-
-- [ ] **Step 2: Run it under the sandboxed build**
-
-```bash
-.claude/store/ApplioStore.app/Contents/MacOS/Applio /absolute/path/to/.claude/store/tools/pipe_channel_probe.py
-```
-
-Expected: `PIPE_OK {'from': 'worker'}` and then `QUEUE_FAILED ...`.
-
-- [ ] **Step 3: Record it**
-
-If both lines are as expected, a later plan can replace the three queues and two events of `rvc/realtime/worker.py` (`VoiceChangerWorker`) with pipe-based equivalents, behind a store patcher. That plan needs the worker's use of the queue methods first (`put`, `get`, `empty`, `is_set`, `set`, `wait`), which nobody has listed yet.
+When the owner agrees, merge `store-edition` into `main` (the direct edition gains the computed minimum macOS version; the next direct build publishes it). Until then the branch stays separate.
 
 ---
-
 ## Self-review
 
-**Spec coverage** (each requirement of `docs/APP_STORE_READINESS.md` section 4 has a task):
+**Spec coverage** (each point of `docs/APP_STORE_READINESS.md` section 4 has a task):
 
-- Build: sandbox entitlements, store-only patchers, store signing with profile, no notarization, no disk image, `dist-store/`: task 1 and task 8.
-- Pipeline without worker processes: task 2.
-- Checkpoints as data: task 3.
-- Wrapper: MIME types, data in the container, no Python files in the data location, bookmarks: tasks 4 and 5.
-- Interface: no plugins, updater, update check, Discord presence; download prompt; privacy link; no Realtime: task 6.
-- Bundle: category, encryption key, bundle id, name and icon as inputs: task 1; flagged string: task 8; SDK: task 8.
-- Verification in the sandbox: task 7. Upload and record: task 9. Real-time conversion: decision 5 and task 10.
-- Decisions 1 to 8: the DECIDE list, with the build inputs that carry them.
+- Build: sandbox entitlements, store-only patchers, store signing with profile, no notarization, no disk image, `dist-store/`: tasks 1 and 8.
+- Pipeline without worker processes: task 2. Checkpoints as data only: task 3.
+- Data in a folder the user chose, with its bookmark in the app and in the keychain, found again after a restart and a reinstall: tasks 4, 5 and step 8.6.
+- Wrapper: MIME types, no Python files in the data location: task 5.
+- Interface: no plugins, updater, update check, Discord presence; selectable downloads with File, Download Models…; privacy link and licence notes; no Realtime: task 6.
+- Verification in the sandbox, and the pipe probe for a later real-time conversion: task 7.
+- Bundle: category, encryption key, the owner's bundle id, the computed minimum macOS version, the flagged string, the SDK: tasks 1 and 8.
+- Upload, TestFlight, the record with IAHispano's authorisation in the notes: task 9.
 
-**Placeholder scan:** no task leaves its content to be written later. The three places that depend on facts only the run shows are explicit steps with an expected and an alternative outcome: the PyObjC out-parameter form (task 5 step 4), the SDK (task 8 steps 8.7 and 8.8) and the renamed data folder (task 7 step 7.9).
+**The owner's eight answers:** 1 (name and icon) in task 9; 2 (own bundle id) in tasks 1 and 8, the string still open; 3 (copyleft parts stay) in task 6; 4 (data location) in tasks 4 and 5; 5 (no real-time conversion) in tasks 6 and 7; 6 (selectable downloads) in task 6; 7 (privacy policy on GitHub) in tasks 1, 6 and 8; 8 (minimum macOS version) in task 1.
 
-**Names used consistently:** `store_edition()`, `default_data_location()`, `prepare_for_sandbox()`, `PRIVACY_POLICY_URL` (`applio_edition`); `option_problems()`, `replace_flagged_scheme()`, `FLAGGED_SCHEME` (`build_options`); `bookmark_path()`, `save_bookmark(path, store_at=None)`, `resolve_bookmark(store_at=None)` (`applio_bookmarks`); `models_are_present(path)`, `confirm_first_download(path)`, `MODEL_MARKER` (`applio_download_prompt`); `native_loop_is_available()` (`applio_native_picker`); `menu_for_edition(store_edition=False)` (`menu_spec`); `STORE_PATCHES`, `PATCH_MARKERS_STORE`, `active_patch_markers()`, `sign_app_store()`, `flagged_schemes_replaced()`, `flagged_schemes_in_bundle()` (`build_macos.py`); `read_source`, `write_source`, `patch_file`, `run`, `main` (`patches/store/store_patch_common.py`).
+**Placeholder scan:** no task leaves its content to be written later. The places that depend on facts only the run shows are explicit steps with an expected outcome and an alternative: the PyObjC out-parameter form (task 4 step 4), the keychain route (task 8 step 8.6) and the SDK (task 8 steps 8.7 and 8.8).
 
-**Review Focus:** each line has its test or its step: 1 in task 5 and step 7.9, 2 in task 6 and step 7.7, 3 in task 2, 4 in task 1, 5 in task 5 and step 7.9.
+**Names used consistently:** `store_edition()`, `prepare_for_sandbox()`, `PRIVACY_POLICY_URL` (`applio_edition`); `option_problems()`, `replace_flagged_scheme()`, `minimum_macos_version()`, `FLAGGED_SCHEME` (`build_options`); `bookmark_path()`, `save(path, store_at=None)`, `resolve_saved(saved_path, store_at=None)`, `resolve_remembered(store_at=None)`, `read_keychain()`, `write_keychain(data)`, `_create(path)`, `_resolve(data)` (`applio_bookmarks`); `real_home()`, `is_writable(path)`, `resolve(saved_path, prefs, bookmarks, pick_folder, confirm_continue, quit_app)` (`applio_data_location`); `BASE`, `PARTS`, `missing_parts(data_path)`, `download_parts(parts)`, `ask_which_parts(missing, required)`, `first_launch(data_path)`, `download_from_menu(data_path)` (`applio_model_downloads`); `native_loop_is_available()` (`applio_native_picker`); `menu_for_edition(store_edition=False)` (`menu_spec`); `confirm_store_data_location(reason)` (`macos_wrapper.py`); `openPrivacyPolicy_`, `downloadModels_` (`applio_launcher.py`); `STORE_PATCHES`, `PATCH_MARKERS_STORE`, `active_patch_markers()`, `sign_app_store()`, `bundle_minimum_macos_version()`, `set_minimum_macos_version()`, `flagged_schemes_replaced()`, `flagged_schemes_in_bundle()` (`build_macos.py`); `read_source`, `write_source`, `patch_file`, `run`, `main` (`patches/store/store_patch_common.py`).
+
+**Review Focus:** each line has its test or its step: 1 in tasks 4, 5 and step 8.6; 2 in task 6 and steps 7.4 and 7.6; 3 in task 2; 4 in task 1; 5 in tasks 1 and 8; 6 in task 5 and step 7.5.

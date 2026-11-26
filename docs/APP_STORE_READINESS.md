@@ -1,27 +1,25 @@
 # Mac App Store edition: what it takes
 
-Assessed on 2026-11-26. The implementation plan is
+Assessed on 2026-11-26, decided by the owner the same day. The implementation plan is
 [`docs/superpowers/plans/2026-11-26-app-store-edition.md`](superpowers/plans/2026-11-26-app-store-edition.md).
-Nothing of it is built yet. The order agreed with the owner: finish the manual test pass and the
-3.7.2.1 release first.
+The work is done on the branch `store-edition`. The 3.7.2.1 release has priority: when the
+owner's manual test results arrive, the release is handled first.
 
 ## Verdict
 
-It can be done. The app for the Mac App Store would be a second edition, built from the same
-sources as a variant of the normal build, while the direct-download edition (Developer ID
-certificate, notarized) stays as it is.
+It can be done. The app for the Mac App Store is a second edition, built from the same sources
+as a variant of the normal build, while the direct-download edition (Developer ID certificate,
+notarized) stays as it is. The owner expects the store edition to gain features of its own,
+which is why it has a bundle id of its own.
 
 Two experiments on 2026-11-26 answered the largest technical questions. The app starts and
-trains in the App Sandbox once it stops using worker processes, and training without them
-costs about 5 to 11 percent on the build Mac.
+trains in the App Sandbox once it stops using worker processes, and training without them costs
+about 5 to 11 percent on the build Mac.
 
-One limit showed up while writing the plan: real-time conversion runs its voice changer in a
-second process, connected by process queues and events. Those need the named semaphores the
-sandbox denied in the experiment, so real-time conversion is expected to fail there (not tested
-yet). The first store version would ship without that page unless its process channel is
-rebuilt (section 6, decision 5).
-
-What is left is engineering, plus decisions that belong to the owner and to upstream (section 6).
+One limit showed up while planning: real-time conversion runs its voice changer in a second
+process, connected by process queues and events. Those need the named semaphores the sandbox
+denied in the experiment, so it is expected to fail there. The owner's choice: the first store
+version has no Realtime page; it may return later on another process channel.
 
 ## 1. Apple's rules that matter
 
@@ -30,7 +28,7 @@ From the [App Store Review Guidelines](https://developer.apple.com/app-store/rev
 
 - **4.1 (c), name and icon.** "You cannot use another developer’s icon, brand, or product name
   in your app’s icon or name, without approval from the developer." The name Applio and the
-  icon are IAHispano's.
+  icon are IAHispano's. The owner has IAHispano's authorisation.
 - **2.4.5 (i) and 2.5.2, sandbox.** Mac apps "must be appropriately sandboxed" and "may not read
   or write data outside the designated container area, nor may they download, install, or
   execute code which introduces or changes features or functionality of the app".
@@ -74,18 +72,28 @@ Facts from the repository and from build 3.7.2.1:
   downloads, network client and server, Apple Events, and the three Hardened Runtime keys
   (`cs.allow-jit`, `cs.allow-unsigned-executable-memory`, `cs.disable-library-validation`).
   No microphone entitlement.
-- The built app is arm64 only, needs macOS 12.0 or later, has no `LSApplicationCategoryType`,
-  and carries upstream's bundle id `com.iahispano.applio`. The usage description for the
-  microphone is in its Info.plist.
+- The built app is arm64 only, has no `LSApplicationCategoryType`, and carries upstream's
+  bundle id `com.iahispano.applio`. The usage description for the microphone is in its
+  Info.plist.
+- **The minimum macOS version in the Info.plist is wrong.** It says 12.0.0. The bundle's own
+  binaries say otherwise: `orjson` is built for macOS 15.0, 113 other binaries for 14.0, and
+  dyld refuses to load a binary on an older system than it was built for. The app cannot start
+  below macOS 15. The plan makes the build compute the number from the bundle, for both
+  editions.
 - The Plugins page downloads a zip and runs it (`tabs/plugins/plugins_core.py`).
 - Upstream's updater (`assets/updater.py`) and version checker ship in the bundle. The fork's
   "Check for Updates" opens the GitHub releases.
 - Discord presence (`assets/discord_presence.py`) starts with the app when the setting is on.
-- Every start runs the first-launch model download when files are missing: about 3 GB
-  (pretrained pairs for HiFi-GAN and RefineGAN, pitch extractors, embedder).
+- Every start downloads the models that are missing, in one block of about 3 GB: the pitch
+  extractors and the embedder (about 0.6 GB), the HiFi-GAN pretrained voices (about 0.6 GB)
+  and the RefineGAN pretrained voices (about 2.0 GB). Upstream's helpers
+  (`rvc/lib/tools/prerequisites_download.py`) keep the three groups apart, so they can be
+  offered one by one.
 - Worker processes: preprocessing (`rvc/train/preprocess/preprocess.py`), feature extraction
   (`rvc/train/extract/extract.py`, two pools) and the training DataLoader
   (`rvc/train/train.py`). Real-time conversion: `rvc/realtime/worker.py`.
+- Two checkpoint readers fall back to unrestricted `torch.load` when the safe loader rejects a
+  file (`rvc/train/process/model_information.py`, `rvc/lib/tools/inspect_checkpoint.py`).
 - Upstream's own code puts the data location on `sys.path` (`app.py`, `core.py`,
   `assets/i18n/i18n.py` and several tab modules).
 - Licences: Applio is MIT. Copyleft parts that ship: `soxr` (LGPL, resampling; used by
@@ -123,9 +131,9 @@ Failed:
 With those edits in the copy only, preprocessing and extraction ran serially and training
 completed two epochs with no DataLoader workers.
 
-Not verified: the real interface in the window, the microphone, the folder picker with a
-bookmark on an external volume, real-time conversion, text to speech, TensorBoard, and what
-App Store Connect says at upload.
+Not verified: the real interface in the window, the folder picker with a bookmark on an
+external volume, the login keychain in the sandbox, text to speech, TensorBoard, and what App
+Store Connect says at upload.
 
 ### Cost of training without workers (2026-11-26, about 23:00)
 
@@ -154,6 +162,7 @@ Verdict: the simple route, training without worker processes, is acceptable.
   copy cannot replace `urllib.parse` at collection time.
 - A script-mode start runs with the bundle as working directory and leaves the two
   `runtime_paths.json` files untouched.
+- The highest minimum macOS version among the 325 binaries of build 3.7.2.1 is 15.0.
 
 ## 4. The store edition
 
@@ -163,90 +172,103 @@ A build-time variant of the same sources, switched on by `build_macos.py --store
   files, network client and server, microphone, the three `cs.*` keys). Store-only patchers in
   `patches/store/`. Signing with "Apple Distribution" (or "Apple Development" for local runs)
   and an embedded provisioning profile. No notarization, no DMG. Output in `dist-store/`, so
-  the release build in `dist/` is never touched.
+  the release build in `dist/` is never touched. The minimum macOS version is computed from
+  the bundle.
 - **Pipeline.** No worker processes: serial loops for the three pools, a DataLoader without
-  workers.
-- **Wrapper.** The MIME-types fix before Gradio is imported. The default data location inside
-  the app's container. No Python files copied into the data location. A bookmark for every
-  data location chosen with the menu, resolved at each start.
-- **Interface.** No Plugins page, no updater, no update check, no Discord presence. A prompt
-  before the first model download, with its size. A link to the privacy policy in the app menu
-  and in Settings. Real-time conversion according to decision 5.
-- **Bundle.** Category, encryption key, the owner's bundle id and, if needed, name and icon.
-  The `itms-services` string removed from the two modules.
+  workers. Model checkpoints are loaded as data only.
+- **Data location.** A folder the user chooses at the first launch, on any disk. Never inside
+  the app's container: macOS may remove the container together with the app, and the data must
+  survive that. The folder stays reachable through a security-scoped bookmark, kept in two
+  places: in the app's container and in the login keychain, which survives removing the app. So
+  a new installation finds the folder again by itself. "Set Data Location" changes it at any
+  time.
+- **Model downloads.** A dialog at the first launch, with three parts: the base models (about
+  0.6 GB, needed to convert and to train), the HiFi-GAN pretrained voices (about 0.6 GB) and
+  the RefineGAN pretrained voices (about 2.0 GB). The base part is required; the others are the
+  user's choice, also later under File, Download Models…. Nothing is bundled into the app.
+- **Interface.** No Plugins page, no updater, no update check, no Discord presence. A link to
+  the privacy policy in the app menu and in Settings, with the licences of the copyleft parts
+  named. No Realtime page.
+- **Bundle.** Category, encryption key, the owner's bundle id. The `itms-services` string
+  removed from the two modules. The name Applio and the icon stay (IAHispano's authorisation).
 
 What stays as it is, with reason:
 
 - `/usr/bin/open` for Finder and links: it works in the sandbox.
 - The data location on `sys.path` in upstream's modules: nothing writes code there any more
   (the Plugins page is gone), and the bundle comes first on `sys.path`.
-- The direct-download edition: unchanged build, unchanged behaviour.
+- The direct-download edition: unchanged build and behaviour, except for the computed minimum
+  macOS version in its Info.plist.
 
 ## 5. Work list
 
-The plan has ten tasks. Tasks 1 to 7 need no Apple record: the app is signed ad hoc with the
-sandbox entitlements, which enforces the sandbox on this Mac. Tasks 8 and 9 need the owner's
-App ID, profiles and App Store Connect record.
+The plan has ten tasks (0 to 9). Tasks 0 to 7 need no Apple record: the app is signed ad hoc
+with the sandbox entitlements, which enforces the sandbox on this Mac. Tasks 8 and 9 need the
+owner's App ID, profiles and App Store Connect record.
 
-1. `--store` switch in the build, store entitlements, edition recorded in `build_info.json`.
-2. Pipeline without worker processes.
-3. Model checkpoints loaded as data only (two readers fell back to unrestricted loading).
-4. Wrapper in the sandbox: MIME types, data location in the container, no Python files in it.
-5. Bookmarks for a data location outside the container.
-6. Interface: no plugins, updater, update check or Discord presence; download prompt; privacy
-   link.
-7. Verification of the sandboxed build on this Mac, ending with the owner's VoiceOver pass.
-8. Store signing, provisioning profile, metadata, `itms-services` removal, SDK check.
-9. Upload to App Store Connect, TestFlight, the store record, submission.
-10. Optional: a test of a process channel that works in the sandbox, for real-time conversion.
+- **Task 0, prerequisites.** The worktree, a green baseline, the rule that the 3.7.2.1
+  release comes first.
+- **Task 1, the build.** `--store` switch, store entitlements, the edition recorded in
+  `build_info.json`, the minimum macOS version computed from the bundle.
+- **Task 2, pipeline.** No worker processes.
+- **Task 3, checkpoints.** Loaded as data only.
+- **Task 4, the bookmark.** Kept in the app and in the login keychain.
+- **Task 5, data location.** Always a folder the user chose.
+- **Task 6, interface.** No plugins, updater, update check or Discord presence; selectable
+  downloads; privacy link.
+- **Task 7, the sandboxed build on this Mac.** Ends with the owner's VoiceOver pass, and a
+  probe of a pipe-based process channel for a later real-time conversion.
+- **Task 8, the signed build.** Provisioning profile, the flagged string, the SDK, the
+  reinstall.
+- **Task 9, App Store Connect.** Upload, TestFlight, the store record, submission.
 
 ## 6. Decisions
 
-Each one says what changes with the answer. The recommendation is the plan's default.
+The owner's answers of 2026-11-26:
 
-1. **Name and icon (guideline 4.1 (c)).** Either IAHispano's written approval to use "Applio"
-   and the icon, or a different name and icon. The plan takes both as build inputs
-   (`--app-name`, `--icon`). A different name would also want different wording inside the
-   app, which is not in this plan. Recommended: ask upstream first.
-2. **Bundle id.** Upstream's `com.iahispano.applio`, or the owner's own (reverse-domain of a
-   domain the owner controls). The two editions can then sit side by side, each with its own
-   container, preferences and logs. Recommended: the owner's own id.
-3. **Copyleft parts.** `soxr` cannot simply be dropped (inference and preprocessing use it).
-   `edge-tts` is the text-to-speech feature. Options: accept both knowingly, with their
-   licences named in an acknowledgements screen and their sources offered; leave text to
-   speech out of the store edition; or replace `soxr` with another resampler (work, and a
-   quality question). The WebAssembly FFmpeg build in Gradio's frontend needs a licence check
-   in any case. Recommended: accept `soxr` knowingly; text to speech is the owner's call. This
-   document is not legal advice.
-4. **Data location.** Default inside the container, with "Set Data Location" for any other
-   folder (kept through a bookmark). Recommended: both. The bookmark on an external volume is
-   the first thing task 4 proves.
-5. **Real-time conversion.** Leave it out of the first store version, or rebuild its process
-   channel (task 9 proves whether pipes work in the sandbox first). Recommended: leave it out.
-6. **First download.** A prompted download of about 3 GB, or the conversion models (about
-   0.6 GB: pitch extractors and embedder) bundled into the app with the training pretrains as
-   a prompted download. Recommended: the prompted download, as assessed.
-7. **Privacy policy.** A page the owner publishes; the plan uses
-   `https://froggeric.github.io/applio-macOS-native-app/privacy/` (GitHub Pages of the fork).
-   It must name what leaves the Mac: downloads from the hosts in section 2, and the text sent
-   to Microsoft's speech service.
-8. **Minimum macOS version.** 12.0 today. It can only be tested on the build Mac, so either
-   keep 12.0 or raise it to a version that was tested. Recommended: keep 12.0 unless the
-   upload or a test says otherwise.
+1. **Name and icon.** IAHispano's authorisation exists. Applio and the icon stay. The
+   authorisation goes into the review notes.
+2. **Bundle id.** The owner's own: there is significant work and additional features to warrant
+   a different bundle. The id string is still to be given.
+3. **Copyleft parts.** Approved for inclusion, the owner's responsibility. `soxr` and
+   `edge-tts` stay and are named in the app. This document is not legal advice.
+4. **Data location.** The owner asked for a recommendation, with two requirements: the data
+   must survive removing and reinstalling the app, and the user must be able to change it.
+   Recommendation, followed by the plan: a folder the user chooses, on any disk, with the
+   bookmark kept in the login keychain as well. The keychain part is not yet proven in the
+   sandbox; if it fails, the app asks for the folder once after a reinstall, and the data is
+   never at risk.
+5. **Real-time conversion.** Out of the first store version. The plan runs a small probe
+   (pipes instead of queues) so that a later version knows which way is open.
+6. **First download.** No models bundled. The download is selectable, in three parts, because
+   3 GB is too big for a first download and users may not need everything.
+7. **Privacy policy.** On GitHub for now (`https://froggeric.github.io/applio-macOS-native-app/privacy/`),
+   later the owner's own website. One constant in the code.
+8. **Minimum macOS version.** The owner asked for a recommendation. The bundle decides: 15.0,
+   computed by the build. It cannot be lower without changing dependencies; it can be raised
+   in one line.
+
+Still open with the owner: the bundle id string; whether the two recommendations (4 and 8)
+stand.
 
 ## 7. Risks and unknowns
 
+- **The keychain in the sandbox.** That a bookmark kept in the login keychain survives removing
+  the app and its container, without a prompt, is standard behaviour for an app's credentials
+  but has not been shown for this app. Task 8 tests it with the signed build. The fallback is
+  one folder choice after a reinstall.
 - **SDK at upload.** Apple asks each year for a recent SDK. The bootloader in the bundle was
   built with the macOS 14.2 SDK. The first upload shows whether that passes; if not, the
-  bootloader is rebuilt from PyInstaller's sources with Xcode 27 (task 7). Whether Apple looks
-  at the other binaries in the bundle (PyTorch and others) is unknown.
-- **The review.** A reviewer meets a 3 GB download before anything works. The prompt, the
-  review notes and the "Not now" path must make that plain. Whether a reviewer sees model
-  files (torch checkpoints) as "code" under 2.5.2 is a judgement; the plan checks that
-  downloaded models are loaded as data only.
-- **Real-time conversion** (decision 5).
-- **Features not yet run in the sandbox:** the interface in the window, microphone, text to
-  speech, TensorBoard, model download, Voice Blender, Audio Tools. Task 6 runs them.
+  bootloader is rebuilt from PyInstaller's sources with Xcode 27. Whether Apple looks at the
+  other binaries in the bundle is unknown.
+- **macOS 15 and 26.** The build Mac runs 27.2. The floor is 15.0; nothing below 27 has been
+  tested. TestFlight testers on those versions close the gap.
+- **The review.** A reviewer meets a folder choice and a download before anything works. The
+  dialog, the review notes and the "Not now" path must make that plain. Whether a reviewer sees
+  model files (torch checkpoints) as "code" under 2.5.2 is a judgement; the store edition
+  loads them as data only.
+- **Features not yet run in the sandbox:** the interface in the window, text to speech,
+  TensorBoard, model download, Voice Blender, Audio Tools. Task 7 runs them.
 - **Speed.** Training is 5 to 11 percent slower without workers.
 - **Upstream syncs.** The store patchers need re-pointing after each sync, like the others.
 
