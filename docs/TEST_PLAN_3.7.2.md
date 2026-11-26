@@ -163,7 +163,7 @@ Nothing here must touch your real data or settings.
    Expect: in the new account the folder selection dialog appears. With `APPLIO_DATA_PATH` there is no dialog: the folder is created and used directly.
 
 7.2 Do: choose an empty folder (new account only).
-Expect: the loading screen shows the model download (about 2 GB). The app reaches the main window within 10 minutes.
+Expect: the loading screen shows the model download, about 3 GB (the pretrained pairs for HiFi-GAN and RefineGAN, the pitch extractors and the embedder). The app reaches the main window within about 10 minutes on a normal broadband line.
 
 7.3 Do: look into the folder.
 Expect: `rvc/models/` holds the pretrains, the pitch extractors (`rmvpe.pt`, `fcpe.pt`, `swift.onnx`) and the embedder.
