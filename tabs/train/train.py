@@ -7,6 +7,7 @@ from multiprocessing import cpu_count
 import gradio as gr
 
 from assets.i18n.i18n import I18nAuto
+from assets.app_shell import step_card
 from core import (
     run_extract_script,
     run_index_script,
@@ -341,30 +342,67 @@ def auto_enable_checkpointing():
         return False
 
 
+def _run_training_step(queue_state, stage, operation, args):
+    """Block dependent work after a failed step; retrying that step unblocks it."""
+    model = str(args[0] or "")
+    failed_stage = queue_state.get(model)
+    if failed_stage is not None and failed_stage < stage:
+        message = i18n("Skipped because a previous step failed.")
+        gr.Warning(message)
+        return message
+    queue_state.pop(model, None)
+    try:
+        result = operation(*args)
+    except Exception:
+        queue_state[model] = stage
+        raise
+    if isinstance(result, str):
+        if result.startswith(
+            (
+                "Preprocessing failed",
+                "Feature extraction failed",
+                "Training failed",
+                "Index generation failed",
+            )
+        ):
+            queue_state[model] = stage
+            gr.Warning(result)
+        else:
+            gr.Info(result)
+    return result
+
+
 # Train Tab
 def train_tab():
-    def _preprocess_with_toast(*args):
-        gr.Info(i18n("Preprocessing dataset..."))
-        result = run_preprocess_script(*args)
-        if isinstance(result, str):
-            if "error" in result.lower() or "failed" in result.lower():
-                gr.Warning(result)
-            else:
-                gr.Info(result)
-        return result
+    # Each session keeps its failure state; all sessions share one FIFO resource
+    # queue so preprocessing, extraction and training never overlap.
+    queue_state = gr.State({})
+    queue_options = {"concurrency_id": "training-workflow", "concurrency_limit": 1}
 
-    def _extract_with_toast(*args):
-        gr.Info(i18n("Extracting features..."))
-        result = run_extract_script(*args)
-        if isinstance(result, str):
-            if "error" in result.lower() or "failed" in result.lower():
-                gr.Warning(result)
-            else:
-                gr.Info(result)
-        return result
+    def _preprocess_with_toast(state, *args):
+        def preprocess(*params):
+            gr.Info(i18n("Preprocessing dataset..."))
+            return run_preprocess_script(*params)
+
+        return _run_training_step(state, 1, preprocess, args)
+
+    def _extract_with_toast(state, *args):
+        def extract(*params):
+            gr.Info(i18n("Extracting features..."))
+            return run_extract_script(*params)
+
+        return _run_training_step(state, 2, extract, args)
+
+    def _index_in_queue(state, *args):
+        return _run_training_step(state, 4, run_index_script, args)
 
     # Model settings section
-    with gr.Accordion(i18n("Model Settings")):
+    with step_card(
+        1,
+        "Model Settings",
+        i18n,
+        description="Name your model and choose sample rate, architecture and hardware.",
+    ):
         with gr.Row():
             with gr.Column():
                 model_name = gr.Dropdown(
@@ -375,7 +413,8 @@ def train_tab():
                     interactive=True,
                     allow_custom_value=True,
                 )
-                architecture = gr.Radio(
+                architecture = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Architecture"),
                     info=i18n(
                         "Choose the model architecture:\n- **RVC (V2)**: Default option, compatible with all clients.\n- **Applio**: Advanced quality with improved vocoders and higher sample rates, Applio-only."
@@ -386,14 +425,16 @@ def train_tab():
                     visible=False,
                 )
             with gr.Column():
-                sampling_rate = gr.Radio(
+                sampling_rate = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Sampling Rate"),
                     info=i18n("The sampling rate of the audio files."),
                     choices=["32000", "40000", "48000"],
                     value="40000",
                     interactive=True,
                 )
-                vocoder = gr.Radio(
+                vocoder = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Vocoder"),
                     info=i18n(
                         "Choose the vocoder for audio synthesis:\n- **HiFi-GAN**: Default option, compatible with all clients.\n- **MRF HiFi-GAN**: Higher fidelity, Applio-only.\n- **RefineGAN**: Superior audio quality, Applio-only."
@@ -427,7 +468,7 @@ def train_tab():
                         info=i18n(
                             "Specify the number of GPUs you wish to utilize for extracting by entering them separated by hyphens (-)."
                         ),
-                        placeholder=i18n("0 to ∞ separated by -"),
+                        placeholder=i18n("0 to âˆž separated by -"),
                         value=str(get_number_of_gpus()),
                         interactive=True,
                     )
@@ -438,7 +479,12 @@ def train_tab():
                         interactive=False,
                     )
     # Preprocess section
-    with gr.Accordion(i18n("Preprocess")):
+    with step_card(
+        2,
+        "Prepare Dataset",
+        i18n,
+        description="Point to your dataset, clean it and preprocess audio slices.",
+    ):
         dataset_path = gr.Dropdown(
             label=i18n("Dataset Path"),
             info=i18n("Path to the dataset folder."),
@@ -469,7 +515,8 @@ def train_tab():
         refresh = gr.Button(i18n("Refresh models and datasets"))
 
         with gr.Accordion(i18n("Advanced Settings"), open=False):
-            cut_preprocess = gr.Radio(
+            cut_preprocess = gr.Dropdown(
+                filterable=False,
                 label=i18n("Audio cutting"),
                 info=i18n(
                     "Audio file slicing method: Select 'Skip' if the files are already pre-sliced, 'Simple' if excessive silence has already been removed from the files, or 'Automatic' for automatic silence detection and slicing around it."
@@ -511,7 +558,8 @@ def train_tab():
                     visible=True,
                 )
 
-                normalization_mode = gr.Radio(
+                normalization_mode = gr.Dropdown(
+                    filterable=False,
                     label=i18n("Normalization mode"),
                     info=i18n(
                         "Audio normalization: Select 'none' if the files are already normalized, 'pre' to normalize the entire input file at once, or 'post' to normalize each slice individually."
@@ -522,26 +570,6 @@ def train_tab():
                     visible=True,
                 )
 
-                noise_reduction = gr.Checkbox(
-                    label=i18n("Noise Reduction"),
-                    info=i18n(
-                        "It's recommended keep deactivate this option if your dataset has already been processed."
-                    ),
-                    value=False,
-                    interactive=True,
-                    visible=True,
-                )
-            clean_strength = gr.Slider(
-                minimum=0,
-                maximum=1,
-                label=i18n("Noise Reduction Strength"),
-                info=i18n(
-                    "Set the clean-up level to the audio you want, the more you increase it the more it will clean up, but it is possible that the audio will be more compressed."
-                ),
-                visible=False,
-                value=0.5,
-                interactive=True,
-            )
         preprocess_output_info = gr.Textbox(
             label=i18n("Preprocess output"),
             info=i18n("The output information will be displayed here."),
@@ -551,36 +579,41 @@ def train_tab():
         )
 
         with gr.Row():
-            preprocess_button = gr.Button(i18n("Preprocess Dataset"))
+            preprocess_button = gr.Button(i18n("Preprocess Dataset"), variant="primary")
             preprocess_button.click(
                 fn=_preprocess_with_toast,
                 inputs=[
+                    queue_state,
                     model_name,
                     dataset_path,
                     sampling_rate,
                     cpu_cores,
                     cut_preprocess,
                     process_effects,
-                    noise_reduction,
-                    clean_strength,
                     chunk_len,
                     overlap_len,
                     normalization_mode,
                 ],
                 outputs=[preprocess_output_info],
+                **queue_options,
             )
 
     # Extract section
-    with gr.Accordion(i18n("Extract")):
+    with step_card(
+        3,
+        "Extract Features",
+        i18n,
+        description="Extract pitch and embeddings used for training.",
+    ):
         with gr.Row():
-            f0_method = gr.Radio(
+            f0_method = gr.Dropdown(
+                filterable=False,
                 label=i18n("Pitch extraction algorithm"),
                 info=i18n(
                     "Pitch extraction algorithm to use for the audio conversion. The default algorithm is rmvpe, which is recommended for most cases."
                 ),
                 choices=[
                     "crepe",
-                    "crepe-tiny",
                     "rmvpe",
                     # "fcpe"
                 ],
@@ -588,7 +621,8 @@ def train_tab():
                 interactive=True,
             )
 
-            embedder_model = gr.Radio(
+            embedder_model = gr.Dropdown(
+                filterable=False,
                 label=i18n("Embedder Model"),
                 info=i18n("Model used for learning speaker embedding."),
                 choices=[
@@ -646,10 +680,11 @@ def train_tab():
             max_lines=8,
             interactive=False,
         )
-        extract_button = gr.Button(i18n("Extract Features"))
+        extract_button = gr.Button(i18n("Extract Features"), variant="primary")
         extract_button.click(
             fn=_extract_with_toast,
             inputs=[
+                queue_state,
                 model_name,
                 f0_method,
                 cpu_cores,
@@ -660,10 +695,16 @@ def train_tab():
                 include_mutes,
             ],
             outputs=[extract_output_info],
+            **queue_options,
         )
 
     # Training section
-    with gr.Accordion(i18n("Training")):
+    with step_card(
+        4,
+        "Train Model",
+        i18n,
+        description="Configure epochs and batch size, then start training.",
+    ):
         with gr.Row():
             batch_size = gr.Slider(
                 1,
@@ -795,7 +836,8 @@ def train_tab():
                             allow_custom_value=True,
                         )
 
-            index_algorithm = gr.Radio(
+            index_algorithm = gr.Dropdown(
+                filterable=False,
                 label=i18n("Index Algorithm"),
                 info=i18n(
                     "KMeans is a clustering algorithm that divides the dataset into K clusters. This setting is particularly useful for large datasets."
@@ -805,13 +847,27 @@ def train_tab():
                 interactive=True,
             )
 
-        def enforce_terms(terms_accepted, *args):
+        def enforce_terms(state, terms_accepted, *args):
+            reset_buttons = (gr.update(visible=True), gr.update(visible=False))
             if not terms_accepted:
                 message = i18n("You must agree to the Terms of Use to proceed.")
                 gr.Info(message)
-                return message
-            gr.Info(i18n("Training started..."))
-            return run_train_script(*args)
+                yield message, *reset_buttons
+                return
+
+            def train(*params):
+                gr.Info(i18n("Training started..."))
+                return run_train_script(*params)
+
+            # This runs only when the queued training request actually starts.
+            # A single callback also snapshots all settings at the original click.
+            yield gr.skip(), gr.update(visible=False), gr.update(visible=True)
+            try:
+                result = _run_training_step(state, 3, train, args)
+            except Exception:
+                yield gr.skip(), *reset_buttons
+                raise
+            yield result, *reset_buttons
 
         terms_checkbox = gr.Checkbox(
             label=i18n("I agree to the terms of use"),
@@ -830,24 +886,28 @@ def train_tab():
         )
 
         with gr.Row():
-            train_button = gr.Button(i18n("Start Training"))
+            train_button = gr.Button(i18n("Start Training"), variant="primary")
 
             stop_train_button = gr.Button(i18n("Stop Training"), visible=False)
             stop_train_button.click(
                 fn=stop_train,
                 inputs=[model_name],
                 outputs=[],
+                queue=False,
             )
 
             index_button = gr.Button(i18n("Generate Index"))
             index_button.click(
-                fn=run_index_script,
-                inputs=[model_name, index_algorithm],
+                fn=_index_in_queue,
+                inputs=[queue_state, model_name, index_algorithm],
                 outputs=[train_output_info],
+                **queue_options,
             )
 
     # Export Model section
-    with gr.Accordion(i18n("Export Model"), open=False):
+    with step_card(
+        5, "Export Model", i18n, description="Select trained files to export or upload."
+    ):
         if os.getenv("COLAB_RELEASE_TAG"):
             gr.Markdown(
                 i18n(
@@ -905,14 +965,6 @@ def train_tab():
                 else:
                     return gr.update(visible=pretrained), gr.update(visible=pretrained)
 
-            def enable_stop_train_button(terms_accepted):
-                if not terms_accepted:
-                    return gr.update(visible=True), gr.update(visible=False)
-                return gr.update(visible=False), gr.update(visible=True)
-
-            def disable_stop_train_button():
-                return gr.update(visible=True), gr.update(visible=False)
-
             def download_prerequisites():
                 gr.Info(
                     i18n(
@@ -965,14 +1017,6 @@ def train_tab():
                         "value": "32000",
                     }
 
-            def update_slider_visibility(noise_reduction):
-                return gr.update(visible=noise_reduction)
-
-            noise_reduction.change(
-                fn=update_slider_visibility,
-                inputs=noise_reduction,
-                outputs=clean_strength,
-            )
             architecture.change(
                 fn=toggle_architecture,
                 inputs=[architecture],
@@ -1039,12 +1083,9 @@ def train_tab():
                 outputs=[upload_pretrained],
             )
             train_button.click(
-                fn=enable_stop_train_button,
-                inputs=[terms_checkbox],
-                outputs=[train_button, stop_train_button],
-            ).then(
                 fn=enforce_terms,
                 inputs=[
+                    queue_state,
                     terms_checkbox,
                     model_name,
                     save_every_epoch,
@@ -1065,14 +1106,10 @@ def train_tab():
                     checkpointing,
                     shutdown_check,
                 ],
-                outputs=[train_output_info],
+                outputs=[train_output_info, train_button, stop_train_button],
+                **queue_options,
             )
 
-            train_output_info.change(
-                fn=disable_stop_train_button,
-                inputs=[],
-                outputs=[train_button, stop_train_button],
-            )
             pth_dropdown_export.change(
                 fn=export_pth,
                 inputs=[pth_dropdown_export],

@@ -1,6 +1,14 @@
 import os
 import sys
 
+sys.path.append(os.getcwd())
+from rvc.lib.terminal import capture_worker_output
+
+capture_worker_output()
+
+if sys.platform == "darwin":
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 os.environ["USE_LIBUV"] = "0" if sys.platform == "win32" else "1"
 import datetime
 import glob
@@ -41,6 +49,7 @@ from rvc.train.utils import (
 # Zluda hijack
 import rvc.lib.zluda
 from rvc.lib.algorithm import commons
+from rvc.lib.user_config import load_config, get_logs_dir
 from rvc.train.process.extract_model import extract_model
 
 # Parse command line arguments
@@ -64,7 +73,6 @@ cache_data_in_gpu = _strtobool(sys.argv[11])
 cleanup = _strtobool(sys.argv[12])
 vocoder = sys.argv[13]
 checkpointing = _strtobool(sys.argv[14])
-# experimental settings
 randomized = True
 d_lr_coeff = 1.0
 g_lr_coeff = 1.0
@@ -80,27 +88,21 @@ if vocoder == "RefineGAN":
 current_dir = os.getcwd()
 
 try:
-    with open(
-        os.path.join(current_dir, "assets", "config.json"),
-        "r",
-        encoding="utf-8",
-    ) as f:
-        config = json.load(f)
-        precision = config["precision"]
-        if (
-            precision == "bf16"
-            and torch.cuda.is_available()
-            and torch.cuda.is_bf16_supported()
-        ):
-            train_dtype = torch.bfloat16
-        elif precision == "fp16" and torch.cuda.is_available():
-            train_dtype = torch.float16
-        else:
-            train_dtype = torch.float32
+    precision = load_config()["precision"]
+    if (
+        precision == "bf16"
+        and torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported()
+    ):
+        train_dtype = torch.bfloat16
+    elif precision == "fp16" and torch.cuda.is_available():
+        train_dtype = torch.float16
+    else:
+        train_dtype = torch.float32
 except (FileNotFoundError, json.JSONDecodeError, KeyError):
     train_dtype = torch.float32
 
-experiment_dir = os.path.join(current_dir, "logs", model_name)
+experiment_dir = os.path.join(get_logs_dir(), model_name)
 config_save_path = os.path.join(experiment_dir, "config.json")
 dataset_path = os.path.join(experiment_dir, "sliced_audios")
 model_info_path = os.path.join(experiment_dir, "model_info.json")
@@ -117,15 +119,35 @@ except FileNotFoundError:
 
 config.data.training_files = os.path.join(experiment_dir, "filelist.txt")
 
-torch.backends.cudnn.deterministic = False
-torch.backends.cudnn.benchmark = True
-# TF32 settings, should improve performance in some cases
-try:
-    torch.set_float32_matmul_precision("high")
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-except Exception as e:
-    print(f"Torch tf32: {e}")
+is_amd = getattr(torch.version, "hip", None) is not None or (
+    torch.cuda.is_available()
+    and (
+        "AMD" in torch.cuda.get_device_name().upper()
+        or "RADEON" in torch.cuda.get_device_name().upper()
+        or torch.cuda.get_device_name().endswith("[ZLUDA]")
+    )
+)
+
+if is_amd:
+    if getattr(torch.version, "hip", None) is None:
+        torch.backends.cudnn.enabled = False
+        torch.backends.cudnn.benchmark = False
+    try:
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+    except Exception:
+        pass
+else:
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = os.name == "nt"
+    # TF32 settings, should improve performance in some cases
+    try:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception as e:
+        print(f"Torch tf32: {e}")
 
 global_step = 0
 last_loss_gen_all = 0
@@ -175,7 +197,7 @@ def main():
     """
     global training_file_path, last_loss_gen_all, gpus
 
-    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(randint(20000, 55555))
     # Check sample rate
     wavs = glob.glob(
@@ -191,14 +213,15 @@ def main():
     else:
         print("No wav file found.")
 
-    if torch.cuda.is_available():
+    if gpus != "-" and torch.cuda.is_available():
         device = torch.device("cuda")
         gpus = [int(item) for item in gpus.split("-")]
         n_gpus = len(gpus)
-    elif torch.backends.mps.is_available():
+    elif gpus != "-" and torch.backends.mps.is_available():
         device = torch.device("mps")
         gpus = [0]
         n_gpus = 1
+        print("Training on Apple Silicon MPS (FP32; CPU spectral loss).")
     else:
         device = torch.device("cpu")
         gpus = [0]
@@ -215,6 +238,8 @@ def main():
             try:
                 existing_data = json.load(pid_file)
                 pid_data.update(existing_data)
+                # Drop stale PIDs from crashed runs before appending new ones.
+                pid_data["process_pids"] = []
             except json.JSONDecodeError:
                 pass
         with open(config_save_path, "w") as pid_file:
@@ -242,12 +267,21 @@ def main():
         for i in range(n_gpus):
             children[i].join()
 
+        failed_children = [c for c in children if c.exitcode and c.exitcode != 0]
+        if failed_children:
+            exit_code = failed_children[0].exitcode or 1
+            print(
+                f"Error: Training worker process failed with exit code {exit_code}.",
+                flush=True,
+            )
+            sys.exit(exit_code)
+
     if cleanup:
         print("Removing files from the prior training attempt...")
 
         # Clean up unnecessary files
         for root, dirs, files in os.walk(
-            os.path.join(now_dir, "logs", model_name), topdown=False
+            os.path.join(get_logs_dir(), model_name), topdown=False
         ):
             for name in files:
                 file_path = os.path.join(root, name)
@@ -306,17 +340,39 @@ def run(
     else:
         writer_eval = None
 
-    dist.init_process_group(
-        backend="gloo" if sys.platform == "win32" or device.type != "cuda" else "nccl",
-        init_method="env://",
-        world_size=n_gpus if device.type == "cuda" else 1,
-        rank=rank if device.type == "cuda" else 0,
-    )
+    if n_gpus > 1 and device.type == "cuda":
+        master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+        if master_addr == "localhost":
+            master_addr = "127.0.0.1"
+        master_port = os.environ.get("MASTER_PORT", "24149")
+        os.environ["MASTER_ADDR"] = master_addr
+        os.environ["MASTER_PORT"] = master_port
+
+        try:
+            dist.init_process_group(
+                backend="gloo" if sys.platform == "win32" else "nccl",
+                init_method=f"tcp://{master_addr}:{master_port}",
+                world_size=n_gpus,
+                rank=rank,
+            )
+        except Exception as e:
+            print(
+                f"Warning: Failed to initialize distributed process group: {e}. Continuing without DDP."
+            )
 
     torch.manual_seed(config.train.seed)
 
     if torch.cuda.is_available():
         torch.cuda.set_device(device_id)
+        if (
+            getattr(torch.version, "hip", None) is not None
+            or "AMD" in torch.cuda.get_device_name(device_id).upper()
+            or "RADEON" in torch.cuda.get_device_name(device_id).upper()
+            or torch.cuda.get_device_name(device_id).endswith("[ZLUDA]")
+        ):
+            if getattr(torch.version, "hip", None) is None:
+                torch.backends.cudnn.enabled = False
+                torch.backends.cudnn.benchmark = False
 
     # Create datasets and dataloaders
     from data_utils import (
@@ -338,21 +394,23 @@ def run(
 
     train_loader = DataLoader(
         train_dataset,
-        num_workers=4,
+        num_workers=2 if device.type == "mps" else 4,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=device.type == "cuda",
         collate_fn=collate_fn,
         batch_sampler=train_sampler,
         persistent_workers=True,
-        prefetch_factor=8,
+        prefetch_factor=2 if device.type == "mps" else 8,
     )
 
     # Validations
     if len(train_loader) < 3:
         print(
-            "Not enough data present in the training set. Perhaps you forgot to slice the audio files in preprocess?"
+            f"Not enough data present in the training set ({len(train_dataset)} segments -> {len(train_loader)} batches with batch size {batch_size}). "
+            "Perhaps you forgot to slice the audio files in preprocess? "
+            "Add more audio, re-run preprocess without 'Skip' cutting, or lower the batch size."
         )
-        os._exit(2333333)
+        os._exit(1)
 
     # defaults
     embedder_name = "contentvec"
@@ -439,7 +497,7 @@ def run(
         print("Using Single-Scale Mel loss function")
 
     # Wrap models with DDP for multi-gpu processing
-    if n_gpus > 1 and device.type == "cuda":
+    if n_gpus > 1 and device.type == "cuda" and dist.is_initialized():
         net_g = DDP(net_g, device_ids=[device_id])
         net_d = DDP(net_d, device_ids=[device_id])
 
@@ -451,7 +509,7 @@ def run(
     # Load checkpoint if available
     scaler_dict = {}
     try:
-        print("Starting training...")
+        print("Starting training...", flush=True)
         _, _, _, epoch_str, scaler_dict = load_checkpoint(
             latest_checkpoint_path(experiment_dir, "D_*.pth"), net_d, optim_d
         )
@@ -523,17 +581,21 @@ def run(
 
     cache = []
     # collect the reference audio for tensorboard evaluation
-    if os.path.isfile(os.path.join("logs", "reference", embedder_name, "feats.npy")):
+    if os.path.isfile(
+        os.path.join(get_logs_dir(), "reference", embedder_name, "feats.npy")
+    ):
         print("Using", embedder_name, "reference set for validation")
-        phone = np.load(os.path.join("logs", "reference", embedder_name, "feats.npy"))
+        phone = np.load(
+            os.path.join(get_logs_dir(), "reference", embedder_name, "feats.npy")
+        )
         # expanding x2 to match pitch size
         phone = np.repeat(phone, 2, axis=0)
         phone_lengths = torch.LongTensor([phone.shape[0]]).to(device)
         phone = torch.FloatTensor(phone).unsqueeze(0).to(device)
-        pitch = np.load(os.path.join("logs", "reference", "pitch_coarse.npy"))
+        pitch = np.load(os.path.join(get_logs_dir(), "reference", "pitch_coarse.npy"))
         # removed last frame to match features
         pitch = torch.LongTensor(pitch[:-1]).unsqueeze(0).to(device)
-        pitchf = np.load(os.path.join("logs", "reference", "pitch_fine.npy"))
+        pitchf = np.load(os.path.join(get_logs_dir(), "reference", "pitch_fine.npy"))
         # removed last frame to match features
         pitchf = torch.FloatTensor(pitchf[:-1]).unsqueeze(0).to(device)
         sid = torch.LongTensor([0]).to(device)
@@ -644,7 +706,19 @@ def train_and_evaluate(
         data_iterator = enumerate(train_loader)
 
     epoch_recorder = EpochRecorder()
-    with tqdm(total=len(train_loader), leave=False) as pbar:
+    num_batches = max(1, len(train_loader))
+    # Keep machine-readable counters in the live bar so both terminal capture
+    # and the desktop job stream can track batches without separate log rows.
+    with tqdm(
+        total=num_batches,
+        desc=f"epoch={epoch} | step={global_step}",
+        bar_format="{desc} | {percentage:3.0f}%|{bar}| batch={n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        leave=False,
+        mininterval=0.5,
+        maxinterval=10.0,
+        dynamic_ncols=True,
+        disable=rank != 0,
+    ) as pbar:
         for batch_idx, info in data_iterator:
             if device.type == "cuda" and not cache_data_in_gpu:
                 info = [tensor.cuda(device_id, non_blocking=True) for tensor in info]
@@ -737,10 +811,10 @@ def train_and_evaluate(
             loss_gen, _ = generator_loss(y_d_hat_g)
             loss_gen_all = loss_gen + loss_fm + loss_mel + loss_kl
 
-            if loss_gen_all < lowest_value["value"]:
+            if loss_gen_all.item() < lowest_value["value"]:
                 lowest_value = {
                     "step": global_step,
-                    "value": loss_gen_all,
+                    "value": loss_gen_all.item(),
                     "epoch": epoch,
                 }
             optim_g.zero_grad()
@@ -801,8 +875,13 @@ def train_and_evaluate(
                     scalars=scalar_dict,
                 )
 
+            pbar.set_description_str(
+                f"epoch={epoch} | step={global_step}",
+                refresh=False,
+            )
             pbar.update(1)
-        # end of batch train
+        # Show the final batch even when an epoch finishes before mininterval.
+        pbar.refresh()
     # end of tqdm
     with torch.no_grad():
         torch.cuda.empty_cache()
@@ -893,7 +972,7 @@ def train_and_evaluate(
 
     if rank == 0:
         # Print training progress
-        lowest_value_rounded = round(lowest_value["value"].detach().item(), 3)
+        lowest_value_rounded = round(lowest_value["value"], 3)
 
         record = f"{model_name} | epoch={epoch} | step={global_step} | {epoch_recorder.record()}"
         if epoch > 1:
@@ -901,7 +980,7 @@ def train_and_evaluate(
                 record
                 + f" | lowest_value={lowest_value_rounded} (epoch {lowest_value['epoch']} and step {lowest_value['step']})"
             )
-        print(record)
+        print(record, flush=True)
 
         # Save weights every N epochs
         if epoch % save_every_epoch == 0:
@@ -931,12 +1010,13 @@ def train_and_evaluate(
 
         # Check completion
         if epoch >= custom_total_epoch:
-            lowest_value_rounded = round(lowest_value["value"].detach().item(), 3)
             print(
-                f"Training has been successfully completed with {epoch} epoch, {global_step} steps and {round(loss_gen_all.item(), 3)} loss gen."
+                f"Training has been successfully completed with {epoch} epoch, {global_step} steps and {round(loss_gen_all.item(), 3)} loss gen.",
+                flush=True,
             )
             print(
-                f"Lowest generator loss: {lowest_value_rounded} at epoch {lowest_value['epoch']}, step {lowest_value['step']}"
+                f"Lowest generator loss: {lowest_value_rounded} at epoch {lowest_value['epoch']}, step {lowest_value['step']}",
+                flush=True,
             )
             # Final model
             model_add.append(
@@ -977,7 +1057,8 @@ def train_and_evaluate(
             with open(pid_file_path, "w") as pid_file:
                 pid_data.pop("process_pids", None)
                 json.dump(pid_data, pid_file, indent=4)
-            os._exit(2333333)
+            print(f"Model {model_name} trained successfully.")
+            os._exit(0)
 
         with torch.no_grad():
             torch.cuda.empty_cache()

@@ -35,6 +35,28 @@ class TextAudioLoaderMultiNSFsid(torch.utils.data.Dataset):
         lengths = []
         for audiopath, text, pitch, pitchf, dv in self.audiopaths_and_text:
             if self.min_text_len <= len(text) and len(text) <= self.max_text_len:
+                if not os.path.exists(audiopath):
+                    # Check fallback locations relative to APPLIO_CODE_ROOT, APPLIO_ROOT, or repo root
+                    alt_roots = [
+                        os.environ.get("APPLIO_CODE_ROOT"),
+                        os.environ.get("APPLIO_ROOT"),
+                        os.path.abspath(
+                            os.path.join(os.path.dirname(__file__), "..", "..")
+                        ),
+                    ]
+                    found = False
+                    for root in alt_roots:
+                        if root:
+                            cand = os.path.join(root, audiopath)
+                            if os.path.exists(cand):
+                                audiopath = cand
+                                found = True
+                                break
+                    if not found and not os.path.exists(audiopath):
+                        print(
+                            f"Warning: Audio file not found at '{audiopath}', skipping."
+                        )
+                        continue
                 audiopaths_and_text_new.append([audiopath, text, pitch, pitchf, dv])
                 lengths.append(os.path.getsize(audiopath) // (3 * self.hop_length))
         self.audiopaths_and_text = audiopaths_and_text_new
@@ -122,31 +144,14 @@ class TextAudioLoaderMultiNSFsid(torch.utils.data.Dataset):
             )
         audio_norm = audio
         audio_norm = audio_norm.unsqueeze(0)
-        spec_filename = filename.replace(".wav", ".spec.pt")
-        if os.path.exists(spec_filename):
-            try:
-                spec = torch.load(spec_filename, weights_only=True)
-            except Exception as error:
-                print(f"An error occurred getting spec from {spec_filename}: {error}")
-                spec = spectrogram_torch(
-                    audio_norm,
-                    self.filter_length,
-                    self.hop_length,
-                    self.win_length,
-                    center=False,
-                )
-                spec = torch.squeeze(spec, 0)
-                torch.save(spec, spec_filename, _use_new_zipfile_serialization=False)
-        else:
-            spec = spectrogram_torch(
-                audio_norm,
-                self.filter_length,
-                self.hop_length,
-                self.win_length,
-                center=False,
-            )
-            spec = torch.squeeze(spec, 0)
-            torch.save(spec, spec_filename, _use_new_zipfile_serialization=False)
+        spec = spectrogram_torch(
+            audio_norm,
+            self.filter_length,
+            self.hop_length,
+            self.win_length,
+            center=False,
+        )
+        spec = torch.squeeze(spec, 0)
         return spec, audio_norm
 
     def __getitem__(self, index):

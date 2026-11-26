@@ -23,9 +23,11 @@ assets/config.json
 
 logs
 rvc/models
-env
-venv
-.venv
+env*/
+.env*/
+venv*/
+.venv*/
+.applio-update/
 
 # macOS Build Artifacts
 venv_macos/

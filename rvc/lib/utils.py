@@ -1,16 +1,9 @@
 import os
 import sys
-import soxr
-import librosa
-import soundfile as sf
-import numpy as np
 import re
 import unicodedata
-import wget
-from torch import nn
 
 import logging
-from transformers import HubertModel
 import warnings
 
 # Remove this to see warnings about transformers models
@@ -24,17 +17,73 @@ logging.getLogger("torch").setLevel(logging.ERROR)
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 
-base_path = os.path.join(now_dir, "rvc", "models", "formant", "stftpitchshift")
-stft = base_path + ".exe" if sys.platform == "win32" else base_path
+_HubertModelWithFinalProj = None
 
 
-class HubertModelWithFinalProj(HubertModel):
-    def __init__(self, config):
-        super().__init__(config)
-        self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
+def get_hubert_model_class():
+    global _HubertModelWithFinalProj
+    if _HubertModelWithFinalProj is None:
+        from torch import nn
+
+        # HuBERT is audio-only, but Transformers also probes optional vision
+        # packages. Some ROCm wheels leave torchvision installed without its
+        # native operators; do not let that unrelated dependency block audio.
+        from transformers import utils as transformers_utils
+        from transformers.utils import import_utils
+
+        if import_utils.is_torchvision_available():
+            try:
+                import torchvision
+            except (ImportError, OSError, RuntimeError) as error:
+                logging.getLogger(__name__).warning(
+                    "Ignoring unavailable optional torchvision for HuBERT: %s", error
+                )
+                import_utils._torchvision_available = False
+                import_utils.is_torchvision_available = lambda: False
+                import_utils.is_torchvision_v2_available = lambda: False
+                # Transformers re-exports these checks from utils, and image
+                # modules may import that alias rather than import_utils.
+                transformers_utils.is_torchvision_available = lambda: False
+                transformers_utils.is_torchvision_v2_available = lambda: False
+
+        from transformers import HubertModel
+
+        class _RealHubertModelWithFinalProj(HubertModel):
+            def __init__(self, config):
+                super().__init__(config)
+                self.final_proj = nn.Linear(
+                    config.hidden_size, config.classifier_proj_size
+                )
+
+        _HubertModelWithFinalProj = _RealHubertModelWithFinalProj
+    return _HubertModelWithFinalProj
+
+
+class _HubertModelMeta(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, get_hubert_model_class())
+
+    def __subclasscheck__(cls, subclass):
+        return issubclass(subclass, get_hubert_model_class())
+
+    def __getattr__(cls, name):
+        return getattr(get_hubert_model_class(), name)
+
+
+class HubertModelWithFinalProj(metaclass=_HubertModelMeta):
+    def __new__(cls, *args, **kwargs):
+        real_cls = get_hubert_model_class()
+        return real_cls(*args, **kwargs)
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        real_cls = get_hubert_model_class()
+        return real_cls.from_pretrained(*args, **kwargs)
 
 
 def load_audio_16k(file):
+    import librosa
+
     # this is used by f0 and feature extractions that load preprocessed 16k files, so there's no need to resample
     try:
         audio, sr = librosa.load(file, sr=16000)
@@ -45,12 +94,18 @@ def load_audio_16k(file):
 
 
 def load_audio(file, sample_rate):
+    import soundfile as sf
+
     try:
         file = file.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
         audio, sr = sf.read(file)
         if len(audio.shape) > 1:
+            import librosa
+
             audio = librosa.to_mono(audio.T)
         if sr != sample_rate:
+            import librosa
+
             audio = librosa.resample(
                 audio, orig_sr=sr, target_sr=sample_rate, res_type="soxr_vhq"
             )
@@ -60,11 +115,44 @@ def load_audio(file, sample_rate):
     return audio.flatten()
 
 
+def load_audio_ta(file, sample_rate):
+    import numpy as np
+    import soundfile as sf
+
+    try:
+        file = file.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
+        audio, sr = sf.read(file)
+        audio = np.asarray(audio, dtype=np.float32)
+        if len(audio.shape) > 1:
+            import librosa
+
+            audio = librosa.to_mono(audio.T)
+        if sr != sample_rate:
+            import torch
+            import torchaudio
+
+            transform = torchaudio.transforms.Resample(
+                orig_freq=sr,
+                new_freq=sample_rate,
+                lowpass_filter_width=128,
+            )
+            audio = torch.from_numpy(audio).unsqueeze(0)
+            audio = transform(audio).squeeze(0).contiguous().numpy()
+
+    except Exception as error:
+        raise RuntimeError(f"An error occurred loading the audio: {error}")
+
+    return audio
+
+
 def load_audio_infer(
     file,
     sample_rate,
     **kwargs,
 ):
+    import numpy as np
+    import soundfile as sf
+
     formant_shifting = kwargs.get("formant_shifting", False)
     try:
         file = file.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
@@ -72,23 +160,34 @@ def load_audio_infer(
             raise FileNotFoundError(f"File not found: {file}")
         audio, sr = sf.read(file)
         if len(audio.shape) > 1:
+            import librosa
+
             audio = librosa.to_mono(audio.T)
+        if (
+            kwargs.get("cleanup_mode", "off") != "off"
+            and kwargs.get("cleanup_stage", "input") == "input"
+        ):
+            from rvc.lib.tools.audio_cleanup import cleanup_audio
+
+            audio = cleanup_audio(
+                audio, sr, kwargs["cleanup_mode"], kwargs.get("cleanup_strength", 12)
+            )
         if sr != sample_rate:
+            import librosa
+
             audio = librosa.resample(
                 audio, orig_sr=sr, target_sr=sample_rate, res_type="soxr_vhq"
             )
         if formant_shifting:
-            formant_qfrency = kwargs.get("formant_qfrency", 0.8)
-            formant_timbre = kwargs.get("formant_timbre", 0.8)
+            formant_qfrency = kwargs.get("formant_qfrency", 1.0)
+            formant_timbre = kwargs.get("formant_timbre", 1.0)
 
-            from stftpitchshift import StftPitchShift
+            from rvc.lib.tools.formant import FormantShifter
 
-            pitchshifter = StftPitchShift(1024, 32, sample_rate)
-            audio = pitchshifter.shiftpitch(
+            audio = FormantShifter(sample_rate).process_file(
                 audio,
-                factors=1,
-                quefrency=formant_qfrency * 1e-3,
-                distortion=formant_timbre,
+                quefrency=formant_qfrency,
+                timbre=formant_timbre,
             )
     except Exception as error:
         raise RuntimeError(f"An error occurred loading the audio: {error}")
@@ -104,6 +203,8 @@ def format_title(title):
 
 
 def load_embedding(embedder_model, custom_embedder=None):
+    from rvc.lib.tools.http_download import download_http
+
     embedder_root = os.path.join(now_dir, "rvc", "models", "embedders")
     embedding_list = {
         "contentvec": os.path.join(embedder_root, "contentvec"),
@@ -146,11 +247,11 @@ def load_embedding(embedder_model, custom_embedder=None):
         if not os.path.exists(bin_file):
             url = online_embedders[embedder_model]
             print(f"Downloading {url} to {model_path}...")
-            wget.download(url, out=bin_file)
+            download_http(url, bin_file)
         if not os.path.exists(json_file):
             url = config_files[embedder_model]
             print(f"Downloading {url} to {model_path}...")
-            wget.download(url, out=json_file)
+            download_http(url, json_file)
 
     models = HubertModelWithFinalProj.from_pretrained(model_path)
     return models

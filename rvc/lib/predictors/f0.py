@@ -2,13 +2,12 @@ import os
 import json
 import torch
 
-from rvc.lib.predictors.RMVPE import RMVPE0Predictor
-from torchfcpe import spawn_infer_model_from_pt
-import torchcrepe
+from rvc.lib.predictors.chunking import extract_pitch
 import numpy as np
 import librosa
+from rvc.lib.user_config import load_config
 
-# Defaults for the "rmvpe_high_register" section of assets/config.json
+# Defaults for the "rmvpe_high_register" section of the per-user config.json
 # (edited from the Settings tab; see assets/config_template.json).
 HIGH_REGISTER_DEFAULTS = {"enabled": False, "mode": "true_pitch", "f0_ceil": 1250.0}
 
@@ -18,8 +17,7 @@ def load_high_register_settings():
     # (corrector disabled), so RMVPE keeps stock behaviour outside the UI.
     settings = dict(HIGH_REGISTER_DEFAULTS)
     try:
-        with open(os.path.join("assets", "config.json"), "r", encoding="utf-8") as f:
-            section = json.load(f).get("rmvpe_high_register")
+        section = load_config().get("rmvpe_high_register")
         if isinstance(section, dict):
             settings.update(section)
     except (FileNotFoundError, json.JSONDecodeError):
@@ -40,12 +38,27 @@ class RMVPE:
         self.sample_rate = sample_rate
         self.hop_size = hop_size
         # high_register: settings for the high-register corrector (keys:
-        # enabled, mode, f0_ceil). None reads them from assets/config.json;
+        # enabled, mode, f0_ceil). None reads them from the per-user config;
         # callers pass a dict to override (extraction pins the mode, realtime
         # disables it).
         if high_register is None:
             high_register = load_high_register_settings()
         self.high_register = {**HIGH_REGISTER_DEFAULTS, **high_register}
+        if (
+            torch.cuda.is_available()
+            and str(self.device).startswith("cuda")
+            and (
+                getattr(torch.version, "hip", None) is not None
+                or "AMD" in torch.cuda.get_device_name(self.device).upper()
+                or "RADEON" in torch.cuda.get_device_name(self.device).upper()
+                or torch.cuda.get_device_name(self.device).endswith("[ZLUDA]")
+            )
+        ):
+            if getattr(torch.version, "hip", None) is None:
+                torch.backends.cudnn.enabled = False
+                torch.backends.cudnn.benchmark = False
+        from rvc.lib.predictors.RMVPE import RMVPE0Predictor
+
         self.model = RMVPE0Predictor(
             os.path.join("rvc", "models", "predictors", model_name),
             device=self.device,
@@ -97,6 +110,17 @@ class RMVPE:
         return out
 
     def _half_speed_guide(self, x, n_target, thred):
+        """Assemble a bounded octave-down guide on the normal pitch frame clock."""
+        return extract_pitch(
+            x,
+            lambda window: self._half_speed_window(window, thred),
+            self.sample_rate,
+            self.hop_size,
+        )[:n_target]
+
+    def _half_speed_window(self, x, thred):
+        """Build the octave guide locally so resampling cannot double a full track."""
+        n_target = len(x) // self.hop_size + 1
         y = np.asarray(x, dtype=np.float32)
         y2 = librosa.resample(
             y,
@@ -124,8 +148,18 @@ class CREPE:
         self.hop_size = hop_size
 
     def get_f0(self, x, f0_min=50, f0_max=1100, p_len=None, model="full"):
-        if p_len is None:
-            p_len = x.shape[0] // self.hop_size
+        """Extract CREPE with bounded audio and decoder memory, including on CPU."""
+        return extract_pitch(
+            x,
+            lambda window: self._infer_window(window, f0_min, f0_max, model),
+            self.sample_rate,
+            self.hop_size,
+        )
+
+    @torch.inference_mode()
+    def _infer_window(self, x, f0_min, f0_max, model):
+        """Predict and smooth a contextual CREPE window without gradient tracking."""
+        import torchcrepe
 
         if not torch.is_tensor(x):
             x = torch.from_numpy(x)
@@ -153,6 +187,8 @@ class CREPE:
 
 class FCPE:
     def __init__(self, device, sample_rate=16000, hop_size=160):
+        from torchfcpe import spawn_infer_model_from_pt
+
         self.device = device
         self.sample_rate = sample_rate
         self.hop_size = hop_size
@@ -161,11 +197,25 @@ class FCPE:
             self.device,
             bundled_model=True,
         )
+        if str(device) == "mps":
+            from rvc.lib.tools.device import CPUSpectralTransform
+
+            self.model.wav2mel.mel_extractor = CPUSpectralTransform(
+                self.model.wav2mel.mel_extractor
+            )
 
     def get_f0(self, x, p_len=None, filter_radius=0.006):
-        if p_len is None:
-            p_len = x.shape[0] // self.hop_size
+        """Keep FCPE spectral features and attention bounded for long recordings."""
+        return extract_pitch(
+            x,
+            lambda window: self._infer_window(window, filter_radius),
+            self.sample_rate,
+            self.hop_size,
+        )
 
+    @torch.inference_mode()
+    def _infer_window(self, x, filter_radius):
+        """Infer one window and immediately move its contour back to CPU."""
         if not torch.is_tensor(x):
             x = torch.from_numpy(x)
 
@@ -182,3 +232,38 @@ class FCPE:
         )
 
         return f0
+
+
+class SWIFT:
+    def __init__(
+        self,
+        device="cpu",
+        model_name="swift.onnx",
+        sample_rate=16000,
+        hop_size=160,
+    ):
+        self.device = device
+        self.sample_rate = sample_rate
+        self.hop_size = hop_size
+        model_path = os.path.join("rvc", "models", "predictors", model_name)
+        from rvc.lib.predictors.Swift import SwiftPredictor
+
+        self.model = SwiftPredictor(
+            model_path=model_path,
+            device=self.device,
+        )
+
+    def get_f0(self, x, p_len=None, f0_min=50, f0_max=1100, filter_radius=0.5):
+        return self.model.infer_from_audio(
+            x,
+            sample_rate=self.sample_rate,
+            p_len=p_len,
+            hop_size=self.hop_size,
+            f0_min=f0_min,
+            f0_max=f0_max,
+            thred=filter_radius,
+        )
+
+
+Swift = SWIFT
+SwiftF0 = SWIFT

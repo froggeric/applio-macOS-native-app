@@ -5,6 +5,11 @@ import os
 import sys
 import time
 
+sys.path.append(os.getcwd())
+from rvc.lib.terminal import capture_worker_output
+
+capture_worker_output()
+
 
 def strtobool(val):
     """Convert a string representation of truth to a bool."""
@@ -12,7 +17,6 @@ def strtobool(val):
 
 
 import librosa
-import noisereduce as nr
 import numpy as np
 import soxr
 from scipy import signal
@@ -24,7 +28,7 @@ sys.path.append(now_directory)
 
 import logging
 
-from rvc.lib.utils import load_audio
+from rvc.lib.utils import load_audio_ta
 from rvc.train.preprocess.slicer import Slicer
 
 logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
@@ -36,7 +40,6 @@ PERCENTAGE = 3.0
 MAX_AMPLITUDE = 0.9
 ALPHA = 0.75
 HIGH_PASS_CUTOFF = 48
-SAMPLE_RATE_16K = 16000
 RES_TYPE = "soxr_vhq"
 
 
@@ -57,9 +60,7 @@ class PreProcess:
         self.exp_dir = exp_dir
         self.device = "cpu"
         self.gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
-        self.wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
         os.makedirs(self.gt_wavs_dir, exist_ok=True)
-        os.makedirs(self.wavs16k_dir, exist_ok=True)
 
     def _normalize_audio(self, audio: np.ndarray):
         tmp_max = np.abs(audio).max()
@@ -84,17 +85,6 @@ class PreProcess:
             os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{idx1}.wav"),
             self.sr,
             normalized_audio.astype(np.float32),
-        )
-        audio_16k = librosa.resample(
-            normalized_audio,
-            orig_sr=self.sr,
-            target_sr=SAMPLE_RATE_16K,
-            res_type=RES_TYPE,
-        )
-        wavfile.write(
-            os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{idx1}.wav"),
-            SAMPLE_RATE_16K,
-            audio_16k.astype(np.float32),
         )
 
     def simple_cut(
@@ -123,18 +113,6 @@ class PreProcess:
                     self.sr,
                     chunk.astype(np.float32),
                 )
-                # 16KHz for feature extraction
-                chunk_16k = librosa.resample(
-                    chunk, orig_sr=self.sr, target_sr=SAMPLE_RATE_16K, res_type=RES_TYPE
-                )
-                wavfile.write(
-                    os.path.join(
-                        self.wavs16k_dir,
-                        f"{sid}_{idx0}_{i // (chunk_length - overlap_length)}.wav",
-                    ),
-                    SAMPLE_RATE_16K,
-                    chunk_16k.astype(np.float32),
-                )
             i += chunk_length - overlap_length
 
     def process_audio(
@@ -144,25 +122,19 @@ class PreProcess:
         sid: int,
         cut_preprocess: str,
         process_effects: bool,
-        noise_reduction: bool,
-        reduction_strength: float,
         chunk_len: float,
         overlap_len: float,
         normalization_mode: str,
     ):
         audio_length = 0
         try:
-            audio = load_audio(path, self.sr)
+            audio = load_audio_ta(path, self.sr)
             audio_length = librosa.get_duration(y=audio, sr=self.sr)
 
             if process_effects:
                 audio = signal.lfilter(self.b_high, self.a_high, audio)
             if normalization_mode == "pre":
                 audio = self._normalize_audio(audio)
-            if noise_reduction:
-                audio = nr.reduce_noise(
-                    y=audio, sr=self.sr, prop_decrease=reduction_strength
-                )
             if cut_preprocess == "Skip":
                 # no cutting
                 self.process_audio_segment(
@@ -253,8 +225,6 @@ def process_audio_wrapper(args):
         file,
         cut_preprocess,
         process_effects,
-        noise_reduction,
-        reduction_strength,
         chunk_len,
         overlap_len,
         normalization_mode,
@@ -266,8 +236,6 @@ def process_audio_wrapper(args):
         sid,
         cut_preprocess,
         process_effects,
-        noise_reduction,
-        reduction_strength,
         chunk_len,
         overlap_len,
         normalization_mode,
@@ -281,8 +249,6 @@ def preprocess_training_set(
     exp_dir: str,
     cut_preprocess: str,
     process_effects: bool,
-    noise_reduction: bool,
-    reduction_strength: float,
     chunk_len: float,
     overlap_len: float,
     normalization_mode: str,
@@ -313,7 +279,6 @@ def preprocess_training_set(
                 f'Speaker ID folder is expected to be integer, got "{os.path.basename(root)}" instead.'
             )
 
-    # print(f"Number of files: {len(files)}")
     if len(files) == 0:
         print(
             f"No audio files found in the dataset path: '{input_root}'. Please check that the path is correct and contains valid audio files."
@@ -333,8 +298,6 @@ def preprocess_training_set(
                         file,
                         cut_preprocess,
                         process_effects,
-                        noise_reduction,
-                        reduction_strength,
                         chunk_len,
                         overlap_len,
                         normalization_mode,
@@ -354,6 +317,7 @@ def preprocess_training_set(
     print(
         f"Preprocess completed in {elapsed_time:.2f} seconds on {format_duration(audio_length)} seconds of audio."
     )
+    print(f"Model {os.path.basename(exp_dir)} preprocessed successfully.")
 
 
 if __name__ == "__main__":
@@ -367,11 +331,9 @@ if __name__ == "__main__":
         num_processes = int(num_processes)
     cut_preprocess = str(sys.argv[5])
     process_effects = strtobool(sys.argv[6])
-    noise_reduction = strtobool(sys.argv[7])
-    reduction_strength = float(sys.argv[8])
-    chunk_len = float(sys.argv[9])
-    overlap_len = float(sys.argv[10])
-    normalization_mode = str(sys.argv[11])
+    chunk_len = float(sys.argv[7])
+    overlap_len = float(sys.argv[8])
+    normalization_mode = str(sys.argv[9])
     preprocess_training_set(
         input_root,
         sample_rate,
@@ -379,8 +341,6 @@ if __name__ == "__main__":
         experiment_directory,
         cut_preprocess,
         process_effects,
-        noise_reduction,
-        reduction_strength,
         chunk_len,
         overlap_len,
         normalization_mode,
